@@ -1,7 +1,8 @@
 param(
     [ValidateSet('Preview','Normal','Crash')][string]$Mode = 'Normal',
     [string]$Exe = "$PSScriptRoot/../target/release/puwbar.exe",
-    [switch]$Inspect
+    [switch]$Inspect,
+    [string]$CapturePath
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
@@ -18,6 +19,11 @@ public static class PuwProbe {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,StringBuilder b,int n);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h,StringBuilder b,int n);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h,int id);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint msg,IntPtr w,IntPtr l);
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h,uint msg,IntPtr w,IntPtr l);
+    [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr menu);
+    [DllImport("user32.dll")] public static extern uint GetMenuItemID(IntPtr menu,int pos);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out Rect r);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int n);
@@ -51,6 +57,47 @@ try {
     if ($panels.Count -lt 2) { throw 'Không có đủ dock và cụm trạng thái.' }
     $buttons = @($panels | ForEach-Object { [PuwProbe]::Buttons($_) })
     if ('Start' -notin $buttons) { throw 'Thiếu nút Start.' }
+    $tray = $panels | Where-Object { [PuwProbe]::GetDlgItem($_,24) -ne [IntPtr]::Zero } | Select-Object -First 1
+    if (!$tray) {throw 'Missing tray disclosure button'}
+    if ($CapturePath) {
+        Add-Type -AssemblyName System.Drawing
+        $bounds = foreach ($h in $panels) {
+            $rect = New-Object PuwProbe+Rect
+            [PuwProbe]::GetWindowRect($h,[ref]$rect) | Out-Null
+            $rect
+        }
+        $left=($bounds.Left | Measure-Object -Minimum).Minimum-4
+        $top=($bounds.Top | Measure-Object -Minimum).Minimum-4
+        $width=($bounds.Right | Measure-Object -Maximum).Maximum-$left+4
+        $height=($bounds.Bottom | Measure-Object -Maximum).Maximum-$top+4
+        $image=[Drawing.Bitmap]::new([int]$width,[int]$height)
+        $graphics=[Drawing.Graphics]::FromImage($image)
+        try {
+            $graphics.CopyFromScreen($left,$top,0,0,$image.Size)
+            $image.Save($CapturePath,[Drawing.Imaging.ImageFormat]::Png)
+        } finally { $graphics.Dispose(); $image.Dispose() }
+    }
+    $trayItems = 0
+    if ($Mode -eq 'Normal') {
+        $button=[PuwProbe]::GetDlgItem($tray,24)
+        [PuwProbe]::PostMessage($button,245,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null
+        for ($attempt=0; $attempt -lt 15; $attempt++) {
+            Start-Sleep -Milliseconds 100
+            foreach ($popup in [PuwProbe]::Find('#32768')) {
+                [uint32]$menuPid=0
+                [PuwProbe]::GetWindowThreadProcessId($popup,[ref]$menuPid) | Out-Null
+                if ($menuPid -ne $process.Id) {continue}
+                $menu=[PuwProbe]::SendMessage($popup,481,[IntPtr]::Zero,[IntPtr]::Zero)
+                if ($menu -ne [IntPtr]::Zero -and [PuwProbe]::GetMenuItemID($menu,0) -eq 1) {
+                    $trayItems=[PuwProbe]::GetMenuItemCount($menu)
+                }
+                [PuwProbe]::PostMessage($tray,31,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null
+                break
+            }
+            if ($trayItems) {break}
+        }
+        if ($trayItems -lt 1) {throw 'No live notification items in the PuwBar popup (test requires a running tray app)'}
+    }
     if ($Inspect) {
         foreach ($panel in $panels) {
             $r = New-Object PuwProbe+Rect
@@ -82,7 +129,7 @@ try {
     foreach ($bar in $bars) {
         if ([PuwProbe]::IsWindowVisible($bar) -ne $visibility[$bar.ToInt64()]) { throw 'Taskbar gốc chưa được trả lại đúng trạng thái.' }
     }
-    [pscustomobject]@{Mode=$Mode;Result='PASS';Panels=$panels.Count;Buttons=$buttons.Count;VisibleNativeTaskbarsDuringRun=$visible;MainWorkingSetMB=$workingMb;CpuSecondsOver2Seconds=$cpuSeconds;Restored=$true} | ConvertTo-Json -Compress
+    [pscustomobject]@{Mode=$Mode;Result='PASS';Panels=$panels.Count;Buttons=$buttons.Count;TrayItems=$trayItems;VisibleNativeTaskbarsDuringRun=$visible;MainWorkingSetMB=$workingMb;CpuSecondsOver2Seconds=$cpuSeconds;Restored=$true} | ConvertTo-Json -Compress
 } finally {
     if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force; Start-Sleep -Seconds 1 }
     [PuwProbe]::Restore($before,$work)

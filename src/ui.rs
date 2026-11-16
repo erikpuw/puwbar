@@ -11,7 +11,7 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    Graphics::{Dwm::*, Gdi::*},
+    Graphics::Gdi::*,
     System::{Com::*, LibraryLoader::*, Power::*, SystemInformation::*, Threading::*},
     UI::{
         Accessibility::*, Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*,
@@ -27,6 +27,8 @@ const NETWORK: usize = 20;
 const SOUND: usize = 21;
 const BATTERY: usize = 22;
 const CLOCK: usize = 23;
+const NOTIFICATIONS: usize = 24;
+const TRAY_ICON: usize = 30;
 const EXIT_HOTKEY: i32 = 1;
 const FOCUS_HOTKEY: i32 = 2;
 static MAIN: AtomicIsize = AtomicIsize::new(0);
@@ -45,6 +47,7 @@ struct Panel {
 
 struct State {
     groups: Vec<Group>,
+    tray_items: Vec<crate::tray::Item>,
     panels: Vec<Panel>,
     snapshot: Snapshot,
     preview: bool,
@@ -100,6 +103,7 @@ pub fn run() -> Result<(), String> {
 
 unsafe fn run_session(preview: bool, seconds: Option<u32>) -> Result<(), String> {
     let snapshot = Snapshot::capture()?;
+    let tray_items = crate::tray::snapshot().unwrap_or_default();
     let mut groups = shell::pinned();
     shell::refresh(&mut groups);
     let class = wide("PuwBar.Window");
@@ -143,7 +147,13 @@ unsafe fn run_session(preview: bool, seconds: Option<u32>) -> Result<(), String>
             SWP_NOZORDER | SWP_NOACTIVATE,
         );
         let dpi = GetDpiForWindow(dock).max(96);
-        let Some(l) = layout(r.right - r.left, r.bottom - r.top, dpi, groups.len()) else {
+        let Some(l) = layout(
+            r.right - r.left,
+            r.bottom - r.top,
+            dpi,
+            groups.len(),
+            tray_items.iter().filter(|i| i.promoted).count(),
+        ) else {
             DestroyWindow(dock);
             DestroyWindow(tray);
             for p in &panels {
@@ -180,6 +190,7 @@ unsafe fn run_session(preview: bool, seconds: Option<u32>) -> Result<(), String>
     STATE.with(|s| {
         *s.borrow_mut() = Some(State {
             groups,
+            tray_items,
             panels,
             snapshot: snapshot.clone(),
             preview,
@@ -287,11 +298,12 @@ unsafe fn run_session(preview: bool, seconds: Option<u32>) -> Result<(), String>
 
 unsafe fn create_window(class: &[u16], title: &str, instance: HINSTANCE, preview: bool) -> HWND {
     let hwnd = CreateWindowExW(
-        if preview {
-            WS_EX_APPWINDOW
-        } else {
-            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-        },
+        WS_EX_LAYERED
+            | if preview {
+                WS_EX_APPWINDOW
+            } else {
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+            },
         class.as_ptr(),
         wide(title).as_ptr(),
         WS_POPUP | WS_CLIPCHILDREN,
@@ -305,30 +317,7 @@ unsafe fn create_window(class: &[u16], title: &str, instance: HINSTANCE, preview
         null(),
     );
     if !hwnd.is_null() {
-        let dark = 1i32;
-        let backdrop = 3i32;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
-            &dark as *const _ as _,
-            4,
-        );
-        let margins = MARGINS {
-            cxLeftWidth: -1,
-            cxRightWidth: -1,
-            cyTopHeight: -1,
-            cyBottomHeight: -1,
-        };
-        if DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_SYSTEMBACKDROP_TYPE as u32,
-            &backdrop as *const _ as _,
-            4,
-        ) >= 0
-            && DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0
-        {
-            SetPropW(hwnd, wide("PuwBar.Glass").as_ptr(), 1usize as HANDLE);
-        }
+        SetLayeredWindowAttributes(hwnd, 0, 232, LWA_ALPHA);
     }
     hwnd
 }
@@ -493,6 +482,7 @@ fn rebuild() {
                 p.monitor.bottom - p.monitor.top,
                 p.dpi,
                 state.groups.len(),
+                state.tray_items.iter().filter(|i| i.promoted).count(),
             ) else {
                 continue;
             };
@@ -502,6 +492,13 @@ fn rebuild() {
                 .take(l.capacity)
                 .map(|g| format!("{}:{}", g.key, g.windows.len()))
                 .chain(Some(format!("overflow:{}", l.overflow)))
+                .chain(
+                    state
+                        .tray_items
+                        .iter()
+                        .take(l.tray_slots)
+                        .map(|item| format!("{}:{}", item.name, item.pid)),
+                )
                 .collect();
             unsafe {
                 if signature != p.signature {
@@ -533,16 +530,38 @@ fn rebuild() {
                         );
                     }
                     p.signature = signature;
+                    clear_buttons(p.tray, p.tray_tooltip);
                 }
                 if GetWindow(p.tray, GW_CHILD).is_null() {
                     let px = |n| n * p.dpi as i32 / 96;
+                    let extra = l.tray_slots as i32 * px(28);
+                    for (i, item) in state.tray_items.iter().take(l.tray_slots).enumerate() {
+                        button(
+                            p.tray,
+                            p.tray_tooltip,
+                            TRAY_ICON + i,
+                            &item.name,
+                            px(37) + i as i32 * px(28),
+                            px(28),
+                            l.height,
+                        );
+                    }
+                    button(
+                        p.tray,
+                        p.tray_tooltip,
+                        NOTIFICATIONS,
+                        "Ứng dụng trong system tray",
+                        px(5),
+                        px(32),
+                        l.height,
+                    );
                     button(
                         p.tray,
                         p.tray_tooltip,
                         NETWORK,
                         "Mở cài đặt mạng",
-                        px(6),
-                        px(40),
+                        px(37) + extra,
+                        px(34),
                         l.height,
                     );
                     button(
@@ -550,8 +569,8 @@ fn rebuild() {
                         p.tray_tooltip,
                         SOUND,
                         "Mở cài đặt âm thanh",
-                        px(46),
-                        px(40),
+                        px(71) + extra,
+                        px(34),
                         l.height,
                     );
                     button(
@@ -559,8 +578,8 @@ fn rebuild() {
                         p.tray_tooltip,
                         BATTERY,
                         "Pin và nguồn điện",
-                        px(86),
-                        px(84),
+                        px(105) + extra,
+                        px(71),
                         l.height,
                     );
                     button(
@@ -568,7 +587,7 @@ fn rebuild() {
                         p.tray_tooltip,
                         CLOCK,
                         "Ngày và giờ",
-                        px(176),
+                        px(176) + extra,
                         px(78),
                         l.height,
                     );
@@ -770,6 +789,16 @@ fn tick() {
         });
     });
     if rebuild_due {
+        let refresh = STATE.with(|s| s.borrow().as_ref().is_some_and(|s| !s.menu_open));
+        if refresh {
+            if let Ok(items) = crate::tray::snapshot() {
+                STATE.with(|s| {
+                    if let Some(s) = s.borrow_mut().as_mut() {
+                        s.tray_items = items;
+                    }
+                });
+            }
+        }
         rebuild();
     }
 }
@@ -830,6 +859,14 @@ unsafe fn click(owner: HWND, id: usize) {
         BATTERY => shell::launch(owner, "ms-settings:batterysaver"),
         CLOCK => shell::launch(owner, "ms-settings:dateandtime"),
         OVERFLOW => overflow_menu(owner),
+        NOTIFICATIONS => notification_menu(owner),
+        id if (TRAY_ICON..TRAY_ICON + 3).contains(&id) => {
+            let pid =
+                STATE.with(|s| Some(s.borrow().as_ref()?.tray_items.get(id - TRAY_ICON)?.pid));
+            if !pid.is_some_and(|p| activate_tray_window(p)) {
+                notification_menu(owner);
+            }
+        }
         id if id >= APP => {
             let action = STATE.with(|s| {
                 s.borrow()
@@ -847,6 +884,87 @@ unsafe fn click(owner: HWND, id: usize) {
         }
         _ => {}
     }
+}
+
+unsafe fn notification_menu(owner: HWND) {
+    let items = crate::tray::snapshot();
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return;
+    }
+    let entries = match items {
+        Ok(items) if !items.is_empty() => items,
+        result => {
+            let message = if let Err(code) = result {
+                format!("Không đọc được system tray (mã {code})")
+            } else {
+                "Chưa tìm thấy biểu tượng đang hoạt động".into()
+            };
+            AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, wide(&message).as_ptr());
+            menu_at(owner, menu);
+            return;
+        }
+    };
+    let mut images = Vec::new();
+    let dc = GetDC(owner);
+    let edge = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(owner)).max(16);
+    for (index, item) in entries.iter().enumerate() {
+        let id = index + 1;
+        AppendMenuW(
+            menu,
+            MF_STRING,
+            id,
+            wide(&item.name.replace('&', "&&")).as_ptr(),
+        );
+        if !item.icon.0.is_null() {
+            if let Some(image) = Surface::new(dc, edge, edge) {
+                DrawIconEx(
+                    image.dc,
+                    0,
+                    0,
+                    item.icon.0,
+                    edge,
+                    edge,
+                    0,
+                    null_mut(),
+                    DI_NORMAL,
+                );
+                let info = MENUITEMINFOW {
+                    cbSize: size_of::<MENUITEMINFOW>() as _,
+                    fMask: MIIM_BITMAP,
+                    hbmpItem: image.bitmap,
+                    ..std::mem::zeroed()
+                };
+                SetMenuItemInfoW(menu, id as _, 0, &info);
+                images.push(image);
+            }
+        }
+    }
+    ReleaseDC(owner, dc);
+    let choice = menu_at(owner, menu) as usize;
+    if let Some(item) = choice.checked_sub(1).and_then(|i| entries.get(i)) {
+        activate_tray_window(item.pid);
+    }
+}
+
+unsafe fn activate_tray_window(owner_pid: u32) -> bool {
+    let window = STATE.with(|s| {
+        s.borrow()
+            .as_ref()?
+            .groups
+            .iter()
+            .flat_map(|g| &g.windows)
+            .find_map(|(h, _)| {
+                let mut pid = 0;
+                GetWindowThreadProcessId(*h, &mut pid);
+                (pid == owner_pid).then_some(*h)
+            })
+    });
+    if let Some(hwnd) = window {
+        shell::activate(hwnd);
+        return true;
+    }
+    false
 }
 
 unsafe fn menu_at(owner: HWND, menu: HMENU) -> u32 {
@@ -974,11 +1092,7 @@ unsafe fn paint_background(hwnd: HWND) {
     GetClientRect(hwnd, &mut rect);
     let canvas = Surface::new(dc, rect.right, rect.bottom);
     let target = canvas.as_ref().map(|s| s.dc).unwrap_or(dc);
-    if GetPropW(hwnd, wide("PuwBar.Glass").as_ptr()).is_null() {
-        let brush = CreateSolidBrush(rgb(24, 33, 47));
-        FillRect(target, &rect, brush);
-        DeleteObject(brush);
-    }
+    glass_fill(target, rect, 0, rect.bottom);
     let pen = CreatePen(PS_SOLID, 1, rgb(65, 77, 93));
     let old = SelectObject(target, pen);
     let old_brush = SelectObject(target, GetStockObject(HOLLOW_BRUSH));
@@ -997,7 +1111,6 @@ struct Surface {
     dc: HDC,
     bitmap: HBITMAP,
     old: HGDIOBJ,
-    pixels: *mut u32,
     width: i32,
     height: i32,
 }
@@ -1035,22 +1148,12 @@ impl Surface {
             dc,
             bitmap,
             old,
-            pixels: pixels as _,
             width,
             height,
         })
     }
 
     unsafe fn present(&self, target: HDC) {
-        // GDI writes RGB without alpha; preserve transparent glass and make painted content visible.
-        GdiFlush();
-        for pixel in
-            std::slice::from_raw_parts_mut(self.pixels, (self.width * self.height) as usize)
-        {
-            if *pixel & 0xff000000 == 0 && *pixel & 0x00ffffff != 0 {
-                *pixel |= 0xff000000;
-            }
-        }
         BitBlt(
             target,
             0,
@@ -1079,6 +1182,68 @@ const fn rgb(r: u8, g: u8, b: u8) -> u32 {
     r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
 }
 
+unsafe fn glass_fill(dc: HDC, rect: RECT, offset: i32, height: i32) {
+    let vertices = [
+        TRIVERTEX {
+            x: rect.left,
+            y: -offset,
+            Red: 0x1900,
+            Green: 0x2b00,
+            Blue: 0x4500,
+            Alpha: 0xffff,
+        },
+        TRIVERTEX {
+            x: rect.right,
+            y: height - offset,
+            Red: 0x0a00,
+            Green: 0x1300,
+            Blue: 0x2200,
+            Alpha: 0xffff,
+        },
+    ];
+    let mesh = GRADIENT_RECT {
+        UpperLeft: 0,
+        LowerRight: 1,
+    };
+    GdiGradientFill(
+        dc,
+        vertices.as_ptr(),
+        2,
+        (&mesh as *const GRADIENT_RECT).cast(),
+        1,
+        GRADIENT_FILL_RECT_V,
+    );
+}
+
+unsafe fn draw_app_icon(dc: HDC, icon: HICON, x: i32, y: i32, edge: i32) {
+    // Composite on the destination colour before filtering, preserving transparent icon edges.
+    let source = edge.max(48);
+    if let Some(surface) = Surface::new(dc, source, source) {
+        StretchBlt(
+            surface.dc, 0, 0, source, source, dc, x, y, edge, edge, SRCCOPY,
+        );
+        DrawIconEx(
+            surface.dc,
+            0,
+            0,
+            icon,
+            source,
+            source,
+            0,
+            null_mut(),
+            DI_NORMAL,
+        );
+        let old = SetStretchBltMode(dc, HALFTONE);
+        SetBrushOrgEx(dc, 0, 0, null_mut());
+        StretchBlt(
+            dc, x, y, edge, edge, surface.dc, 0, 0, source, source, SRCCOPY,
+        );
+        SetStretchBltMode(dc, old);
+    } else {
+        DrawIconEx(dc, x, y, icon, edge, edge, 0, null_mut(), DI_NORMAL);
+    }
+}
+
 unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
     let canvas = Surface::new(draw.hDC, draw.rcItem.right, draw.rcItem.bottom);
     let dc = canvas.as_ref().map(|s| s.dc).unwrap_or(draw.hDC);
@@ -1087,25 +1252,19 @@ unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
     let px = |n| n * dpi / 96;
     let pressed = draw.itemState & ODS_SELECTED != 0;
     let focused = draw.itemState & ODS_FOCUS != 0;
-    if pressed
-        || GetPropW(GetParent(draw.hwndItem), wide("PuwBar.Glass").as_ptr()).is_null()
-        || canvas.is_none()
-    {
-        let bg = CreateSolidBrush(if pressed {
-            rgb(55, 68, 86)
-        } else {
-            rgb(24, 33, 47)
-        });
+    glass_fill(dc, r, 2, r.bottom + 4);
+    if pressed {
+        let bg = CreateSolidBrush(rgb(55, 68, 86));
         FillRect(dc, &r, bg);
         DeleteObject(bg);
     }
     let center = (r.right + r.left) / 2;
-    let y = (r.bottom - px(28)) / 2;
+    let y = (r.bottom - px(32)) / 2;
     let id = draw.CtlID as usize;
     match id {
         START => {
             let brush = CreateSolidBrush(rgb(45, 185, 240));
-            let size = px(12);
+            let size = px(14);
             let gap = px(2);
             for x in [center - size - gap / 2, center + gap / 2] {
                 for top in [y, y + size + gap] {
@@ -1136,6 +1295,33 @@ unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
             DeleteObject(brush);
         }
         OVERFLOW => text(dc, "···", r, px(20), "Segoe UI", rgb(235, 240, 248)),
+        id if (TRAY_ICON..TRAY_ICON + 3).contains(&id) => STATE.with(|s| {
+            if let Some(item) = s
+                .borrow()
+                .as_ref()
+                .and_then(|s| s.tray_items.get(id - TRAY_ICON))
+            {
+                DrawIconEx(
+                    dc,
+                    center - px(8),
+                    (r.bottom - px(16)) / 2,
+                    item.icon.0,
+                    px(16),
+                    px(16),
+                    0,
+                    null_mut(),
+                    DI_NORMAL,
+                );
+            }
+        }),
+        NOTIFICATIONS => text(
+            dc,
+            "\u{E70E}",
+            r,
+            px(15),
+            "Segoe Fluent Icons",
+            rgb(235, 240, 248),
+        ),
         NETWORK => text(
             dc,
             "\u{E701}",
@@ -1155,10 +1341,53 @@ unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
         BATTERY | CLOCK => {
             let status = status_text();
             let (battery, time) = status.split_once('|').unwrap_or(("AC", "--:--"));
+            let mut label = r;
+            if id == BATTERY && battery.contains('%') {
+                let percent = battery
+                    .split('%')
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(0);
+                let glyph = char::from_u32(
+                    (if battery.contains('⚡') {
+                        0xE85A
+                    } else {
+                        0xE850
+                    }) + (percent.min(100) / 10).min(9),
+                )
+                .unwrap();
+                text(
+                    dc,
+                    &glyph.to_string(),
+                    RECT { right: px(25), ..r },
+                    px(18),
+                    "Segoe Fluent Icons",
+                    rgb(235, 240, 248),
+                );
+                label.left += px(23);
+            }
+            if id == CLOCK {
+                let brush = CreateSolidBrush(rgb(67, 82, 104));
+                FillRect(
+                    dc,
+                    &RECT {
+                        left: 0,
+                        top: px(10),
+                        right: 1,
+                        bottom: r.bottom - px(10),
+                    },
+                    brush,
+                );
+                DeleteObject(brush);
+            }
             text(
                 dc,
-                if id == BATTERY { battery } else { time },
-                r,
+                if id == BATTERY {
+                    battery.trim_end_matches(" ⚡")
+                } else {
+                    time
+                },
+                label,
                 px(14),
                 "Segoe UI",
                 rgb(235, 240, 248),
@@ -1167,30 +1396,28 @@ unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
         id if id >= APP => STATE.with(|s| {
             let s = s.borrow();
             if let Some(g) = s.as_ref().and_then(|s| s.groups.get(id - APP)) {
-                if !g.icon.0.is_null() {
-                    DrawIconEx(
-                        dc,
-                        center - px(14),
-                        y,
-                        g.icon.0,
-                        px(28),
-                        px(28),
-                        0,
-                        null_mut(),
-                        DI_NORMAL,
-                    );
+                let icon = if g.icon.0.is_null() {
+                    LoadIconW(null_mut(), IDI_APPLICATION)
                 } else {
-                    DrawIconEx(
+                    g.icon.0
+                };
+                draw_app_icon(dc, icon, center - px(16), y, px(32));
+                if !g.pinned
+                    && id > APP
+                    && s.as_ref().is_some_and(|s| s.groups[id - APP - 1].pinned)
+                {
+                    let brush = CreateSolidBrush(rgb(67, 82, 104));
+                    FillRect(
                         dc,
-                        center - px(14),
-                        y,
-                        LoadIconW(null_mut(), IDI_APPLICATION),
-                        px(28),
-                        px(28),
-                        0,
-                        null_mut(),
-                        DI_NORMAL,
+                        &RECT {
+                            left: 0,
+                            top: px(12),
+                            right: 1,
+                            bottom: r.bottom - px(12),
+                        },
+                        brush,
                     );
+                    DeleteObject(brush);
                 }
                 let foreground = GetForegroundWindow();
                 let active = g.windows.iter().any(|(h, _)| *h == foreground);

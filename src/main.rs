@@ -2,6 +2,7 @@
 
 mod desktop;
 mod shell;
+mod tray;
 mod ui;
 
 fn main() {

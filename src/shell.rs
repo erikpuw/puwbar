@@ -8,6 +8,11 @@ use std::{
 };
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::{
+    Storage::EnhancedStorage::PKEY_AppUserModel_ID,
+    System::Com::StructuredStorage::{PropVariantClear, PropVariantToString},
+    UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
+};
+use windows::Win32::{
     System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER, STGM_READ},
     UI::{
         Controls::{IImageList, ILD_TRANSPARENT},
@@ -35,6 +40,7 @@ impl Drop for Icon {
 
 pub struct Group {
     pub key: String,
+    pub app_id: String,
     pub name: String,
     pub launch: String,
     pub icon: Icon,
@@ -86,6 +92,7 @@ pub fn pinned() -> Vec<Group> {
         entries.sort();
         for path in entries {
             let launch = path.to_string_lossy().replace('/', "\\");
+            let mut app_id = String::new();
             let target = unsafe {
                 let link: Result<IShellLinkW, _> =
                     CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER);
@@ -95,6 +102,7 @@ pub fn pinned() -> Vec<Group> {
                         persist
                             .Load(PCWSTR(wide(&launch).as_ptr()), STGM_READ)
                             .ok()?;
+                        app_id = explicit_app_id(link.cast().ok());
                         let mut buf = [0u16; 32768];
                         link.GetPath(&mut buf, null_mut(), 0).ok()?;
                         let len = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
@@ -118,12 +126,13 @@ pub fn pinned() -> Vec<Group> {
                     .filter(|p| !p.is_empty())
                     .unwrap_or_else(|| launch.clone())
             };
-            let key = group_key(&target, "");
+            let key = group_key(&target, &app_id);
             if groups.iter().any(|g: &Group| g.key == key) {
                 continue;
             }
             groups.push(Group {
                 key,
+                app_id,
                 name: path
                     .file_stem()
                     .unwrap_or_default()
@@ -136,17 +145,7 @@ pub fn pinned() -> Vec<Group> {
             });
         }
     }
-    if groups.is_empty() {
-        groups.push(Group {
-            key: group_key("C:\\Windows\\explorer.exe", ""),
-            name: "File Explorer".into(),
-            launch: "explorer.exe".into(),
-            icon: file_icon("C:\\Windows\\explorer.exe"),
-            windows: Vec::new(),
-            pinned: true,
-        });
-    }
-    let order = native_taskbar_order(&groups);
+    let order = native_taskbar_order(&mut groups);
     groups.sort_by_key(|g| pinned_order_rank(&g.name, &order));
     groups
 }
@@ -160,7 +159,7 @@ fn pinned_icon(shortcut: &str, target: &str) -> Icon {
     }
 }
 
-pub fn native_taskbar_order(pins: &[Group]) -> Vec<String> {
+fn native_taskbar_order(pins: &mut Vec<Group>) -> Vec<String> {
     unsafe {
         use windows_sys::Win32::System::Registry::*;
         let key = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Taskband");
@@ -192,9 +191,73 @@ pub fn native_taskbar_order(pins: &[Group]) -> Vec<String> {
         {
             return Vec::new();
         }
+        data.truncate(size as usize);
         let mut order = Vec::new();
-        // shortcut: Taskband is an Explorer-owned format; retain unmatched pins if it changes.
-        for pin in pins {
+        let mut at = 0;
+        while let Some(header) = data.get(at..at + 5) {
+            if header[0] != 0 {
+                break;
+            }
+            let len = u32::from_le_bytes(header[1..5].try_into().unwrap()) as usize;
+            let Some(end) = (at + 5).checked_add(len) else {
+                break;
+            };
+            let Some(record) = data.get(at + 5..end) else {
+                break;
+            };
+            if !valid_pidl(record) {
+                break;
+            }
+            let pidl = record.as_ptr().cast();
+            let mut ptr = null_mut();
+            if SHGetNameFromIDList(pidl, SIGDN_PARENTRELATIVEPARSING, &mut ptr) >= 0
+                && !ptr.is_null()
+            {
+                let id = PCWSTR(ptr).to_string().unwrap_or_default();
+                windows_sys::Win32::System::Com::CoTaskMemFree(ptr.cast());
+                if id.contains('!') && !id.contains(['\\', '/']) {
+                    let key = group_key("", &id);
+                    let mut info: SHFILEINFOW = std::mem::zeroed();
+                    if SHGetFileInfoW(
+                        pidl.cast(),
+                        0,
+                        &mut info,
+                        size_of::<SHFILEINFOW>() as _,
+                        SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX,
+                    ) != 0
+                    {
+                        let name = String::from_utf16_lossy(
+                            &info.szDisplayName[..info
+                                .szDisplayName
+                                .iter()
+                                .position(|x| *x == 0)
+                                .unwrap_or(info.szDisplayName.len())],
+                        );
+                        order.push((at, name.clone()));
+                        if !pins.iter().any(|g| g.key == key) {
+                            let icon = SHGetImageList::<IImageList>(SHIL_EXTRALARGE as i32)
+                                .and_then(|list| list.GetIcon(info.iIcon, ILD_TRANSPARENT.0))
+                                .map(|h| Icon(h.0))
+                                .unwrap_or(Icon(null_mut()));
+                            pins.push(Group {
+                                key,
+                                app_id: id.clone(),
+                                name,
+                                launch: format!("shell:AppsFolder\\{id}"),
+                                icon,
+                                windows: vec![],
+                                pinned: true,
+                            });
+                        }
+                    }
+                }
+            }
+            at = end;
+        }
+        for pin in pins
+            .iter()
+            .filter(|p| p.launch.to_lowercase().ends_with(".lnk"))
+        {
             let needle: Vec<u8> = wide(&format!("{}.lnk", pin.name))
                 .into_iter()
                 .flat_map(u16::to_le_bytes)
@@ -206,6 +269,20 @@ pub fn native_taskbar_order(pins: &[Group]) -> Vec<String> {
         order.sort_by_key(|(offset, _)| *offset);
         order.into_iter().map(|(_, name)| name).collect()
     }
+}
+
+fn valid_pidl(mut bytes: &[u8]) -> bool {
+    while let Some(h) = bytes.get(..2) {
+        let len = u16::from_le_bytes([h[0], h[1]]) as usize;
+        if len == 0 {
+            return bytes.len() == 2;
+        }
+        if len < 2 || len > bytes.len() {
+            return false;
+        }
+        bytes = &bytes[len..];
+    }
+    false
 }
 
 pub fn refresh(groups: &mut Vec<Group>) {
@@ -263,16 +340,44 @@ pub fn refresh(groups: &mut Vec<Group>) {
     }
     let mut processes = HashMap::new();
     for window in windows {
-        let (path, id) = processes
+        let (path, process_id) = processes
             .entry(window.pid)
             .or_insert_with(|| process_identity(window.pid));
         if path.is_empty() {
             continue;
         }
+        let window_id = unsafe {
+            explicit_app_id(
+                SHGetPropertyStoreForWindow(windows::Win32::Foundation::HWND(window.hwnd)).ok(),
+            )
+        };
+        let id = if window_id.is_empty() {
+            process_id.as_str()
+        } else {
+            window_id.as_str()
+        };
         let key = group_key(path, id);
         let index = groups
             .iter()
-            .position(|g| g.key == key || (id.is_empty() && g.key == group_key(path, "")));
+            .position(|g| g.key == key)
+            .or_else(|| groups.iter().position(|g| !id.is_empty() && g.app_id == id))
+            .or_else(|| {
+                if !id.is_empty() {
+                    return None;
+                }
+                let path_key = group_key(path, "");
+                let mut matches = groups
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, g)| g.pinned && g.key.starts_with(&path_key));
+                let (index, _) = matches.next()?;
+                matches.next().is_none().then_some(index)
+            })
+            .or_else(|| {
+                groups
+                    .iter()
+                    .position(|g| g.pinned && g.key == group_key(path, ""))
+            });
         if let Some(index) = index {
             groups[index].windows.push((window.hwnd, window.title));
         } else {
@@ -299,13 +404,14 @@ pub fn refresh(groups: &mut Vec<Group>) {
             if icon.0.is_null() {
                 icon = file_icon(path);
             }
-            let launch = if id.is_empty() {
+            let launch = if process_id.is_empty() {
                 path.clone()
             } else {
-                format!("shell:AppsFolder\\{id}")
+                format!("shell:AppsFolder\\{process_id}")
             };
             groups.push(Group {
                 key,
+                app_id: id.to_owned(),
                 name: Path::new(path)
                     .file_stem()
                     .unwrap_or_default()
@@ -319,6 +425,20 @@ pub fn refresh(groups: &mut Vec<Group>) {
         }
     }
     groups.retain(|g| g.pinned || !g.windows.is_empty());
+}
+
+unsafe fn explicit_app_id(store: Option<IPropertyStore>) -> String {
+    let Some(mut value) = store.and_then(|s| s.GetValue(&PKEY_AppUserModel_ID).ok()) else {
+        return String::new();
+    };
+    let mut buf = [0u16; 256];
+    let ok = PropVariantToString(&value, &mut buf).is_ok();
+    let _ = PropVariantClear(&mut value);
+    if ok {
+        String::from_utf16_lossy(&buf[..buf.iter().position(|c| *c == 0).unwrap_or(buf.len())])
+    } else {
+        String::new()
+    }
 }
 
 fn process_identity(pid: u32) -> (String, String) {
@@ -409,6 +529,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pidl_records_require_whole_items_and_a_terminator() {
+        assert!(valid_pidl(&[4, 0, 0x1f, 0x80, 0, 0]));
+        for malformed in [&[1, 0][..], &[4, 0, 1], &[0, 0, 5], &[2, 0]] {
+            assert!(!valid_pidl(malformed));
+        }
+    }
+
+    #[test]
     fn shell_icon_accepts_paths_built_with_forward_slashes() {
         let path = std::env::var("SystemRoot").unwrap().replace('\\', "/") + "/explorer.exe";
         assert!(
@@ -480,9 +608,7 @@ mod tests {
             windows_sys::Win32::System::Com::CoInitializeEx(null(), 2);
         }
         let pins = pinned();
-        let order = native_taskbar_order(&pins);
-        assert!(!order.is_empty(), "Native taskbar buttons were not found");
-        println!("native order: {order:?}");
+        assert!(!pins.is_empty(), "Native taskbar buttons were not found");
         for p in &pins {
             println!(
                 "pin: {} icon={} target={}",

@@ -4,6 +4,7 @@ pub struct Layout {
     pub dock_width: i32,
     pub tray_x: i32,
     pub tray_width: i32,
+    pub tray_slots: usize,
     pub y: i32,
     pub height: i32,
     pub slot: i32,
@@ -13,13 +14,16 @@ pub struct Layout {
 
 pub const BOTTOM_GAP_DIP: i32 = 4;
 
-pub fn layout(width: i32, height: i32, dpi: u32, apps: usize) -> Option<Layout> {
+pub fn layout(width: i32, height: i32, dpi: u32, apps: usize, promoted: usize) -> Option<Layout> {
     if !(48..=768).contains(&dpi) || height <= 0 {
         return None;
     }
     let px = |n: i32| n * dpi as i32 / 96;
     let (bar_height, slot, padding, margin, gap, tray_width) =
-        (px(48), px(44), px(10), px(8), px(16), px(260));
+        (px(48), px(60), px(10), px(8), px(16), px(260));
+    let spare = width - 2 * margin - gap - tray_width - 2 * padding - 3 * slot;
+    let tray_slots = promoted.min(3).min((spare.max(0) / px(28)) as usize);
+    let tray_width = tray_width + tray_slots as i32 * px(28);
     let tray_x = width - margin - tray_width;
     let available = tray_x - gap - margin;
     let slots = ((available - 2 * padding) / slot).max(0) as usize;
@@ -38,6 +42,7 @@ pub fn layout(width: i32, height: i32, dpi: u32, apps: usize) -> Option<Layout> 
         dock_width,
         tray_x,
         tray_width,
+        tray_slots,
         y: height - px(BOTTOM_GAP_DIP) - bar_height,
         height: bar_height,
         slot,
@@ -69,7 +74,7 @@ mod tests {
 
     #[test]
     fn dock_is_48_high_and_four_from_bottom() {
-        let l = layout(1920, 1080, 96, 8).expect("normal desktop");
+        let l = layout(1920, 1080, 96, 8, 0).expect("normal desktop");
         assert_eq!(l.height, 48);
         assert_eq!(l.y + l.height, 1076);
         assert!(!l.overflow);
@@ -80,7 +85,7 @@ mod tests {
     fn many_apps_leave_space_for_tray_and_overflow() {
         for dpi in [96, 120, 144, 192] {
             for width in [800, 1024, 1366, 1920, 3840] {
-                if let Some(l) = layout(width, 1080, dpi, 100) {
+                if let Some(l) = layout(width, 1080, dpi, 100, 6) {
                     assert!(l.dock_x >= 0);
                     assert!(l.dock_x + l.dock_width + 16 * dpi as i32 / 96 <= l.tray_x);
                     assert!(l.tray_x + l.tray_width <= width);
@@ -94,16 +99,16 @@ mod tests {
 
     #[test]
     fn scaling_preserves_bottom_gap() {
-        let l = layout(2560, 1440, 144, 10).unwrap();
+        let l = layout(2560, 1440, 144, 10, 3).unwrap();
         assert_eq!(l.height, 72);
         assert_eq!(l.y + l.height, 1434);
     }
 
     #[test]
     fn impossible_display_is_rejected() {
-        assert!(layout(100, 100, 96, 5).is_none());
-        assert!(layout(1920, 0, 96, 5).is_none());
-        assert!(layout(1920, 1080, 0, 5).is_none());
+        assert!(layout(100, 100, 96, 5, 0).is_none());
+        assert!(layout(1920, 0, 96, 5, 0).is_none());
+        assert!(layout(1920, 1080, 0, 5, 0).is_none());
     }
 
     #[test]

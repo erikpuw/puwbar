@@ -26,7 +26,7 @@ phát triển được chạy khi WinHawk vẫn hoạt động.
 ## Cách dùng
 
 - Start mở menu Start của Windows.
-- Ứng dụng ghim được đọc từ shortcut taskbar Windows khi khởi động. Các thay đổi
+- Khi khởi động, PuwBar đọc shortcut và ứng dụng đóng gói đã ghim, theo thứ tự của Explorer. Các thay đổi
   ghim trên Windows được nhận ở lần mở PuwBar tiếp theo. Thứ tự lấy từ dữ liệu
   `Taskband\Favorites` của Explorer; nếu định dạng thay đổi, các shortcut không tìm
   thấy vẫn được giữ ở cuối danh sách. PuwBar chỉ đọc dữ liệu này.
@@ -36,6 +36,9 @@ phát triển được chạy khi WinHawk vẫn hoạt động.
   Nếu có nhiều cửa sổ, menu cho phép chọn từng cửa sổ.
 - Khi hết chiều ngang, các ứng dụng dư vào nút `…`. Dock chừa ít nhất 16 DIP trước
   cụm trạng thái. Kích thước icon không bị thu nhỏ để nhét thêm ứng dụng.
+- Bấm `⌃` ở cụm bên phải để xem biểu tượng ứng dụng đang có trong system tray.
+  PuwBar hiện tối đa ba biểu tượng anh đã chọn hiển thị trực tiếp trong Windows.
+  Chọn ứng dụng có cửa sổ để chuyển tới cửa sổ đó. Ứng dụng chỉ chạy nền vẫn có tên và icon trong danh sách.
 - Nút mạng, âm thanh, pin và đồng hồ mở trang cài đặt tương ứng. Phần trăm pin và giờ
   lấy từ hệ thống. Trên máy không có pin, hiển thị `AC`.
 
@@ -60,17 +63,14 @@ bằng chứng rằng thanh gốc không lóe lên trong mọi tình huống kh�
 
 ## Những phần chưa có
 
-Notification tray của ứng dụng khác như UniKey, Discord hoặc ứng dụng chạy nền chưa
-được đưa vào PuwBar. Cụm trạng thái hiện tại gồm các nút hệ thống, không phải bản sao
-đầy đủ của tray gốc. Khi cần các icon đó, thoát PuwBar để dùng taskbar Windows.
+Danh sách tray đối chiếu đăng ký của Explorer với `Shell_NotifyIconGetRect`.
+Icon và tooltip lấy từ bản lưu của Explorer nên có thể chậm cập nhật. Menu chuột phải riêng của ứng dụng tray chưa được hỗ trợ.
 
 Chưa có xem trước cửa sổ, kéo thả, chỉnh ghim trong PuwBar, quick settings riêng,
 Start menu riêng hoặc tự khởi động. Đổi cấu hình màn hình/DPI khi đang chạy sẽ cho
 PuwBar thoát và khôi phục taskbar; mở lại để nhận bố cục mới.
 
-Nền dùng Acrylic của DWM trên Windows 11 có hỗ trợ system backdrop, với lớp vẽ GDI
-32-bit giữ alpha cho nền kính và icon. Khi DWM không hỗ trợ, dùng nền tối đặc.
-Màu Acrylic phụ thuộc thiết lập và nền màn hình; ảnh concept không phải ảnh chụp bản chạy.
+Hai cụm dùng nền xanh đen chuyển sắc bán trong suốt, bo góc 16 DIP. Icon ứng dụng rộng 32 DIP trong ô 60 DIP.
 
 ## Build và kiểm tra
 
