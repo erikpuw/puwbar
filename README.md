@@ -30,6 +30,8 @@ phát triển được chạy khi WinHawk vẫn hoạt động.
   ghim trên Windows được nhận ở lần mở PuwBar tiếp theo. Thứ tự lấy từ dữ liệu
   `Taskband\Favorites` của Explorer; nếu định dạng thay đổi, các shortcut không tìm
   thấy vẫn được giữ ở cuối danh sách. PuwBar chỉ đọc dữ liệu này.
+- Icon ghim lấy từ system image list của Shell, giữ icon riêng trong shortcut
+  (như profile Edge hoặc icon Qoder), dùng nguồn 48 px trước khi vẽ ở kích thước dock.
 - Bấm ứng dụng chưa chạy để mở. Bấm ứng dụng có một cửa sổ để chuyển tới hoặc thu nhỏ.
   Nếu có nhiều cửa sổ, menu cho phép chọn từng cửa sổ.
 - Khi hết chiều ngang, các ứng dụng dư vào nút `…`. Dock chừa ít nhất 16 DIP trước
@@ -90,7 +92,7 @@ rtk proxy powershell -NoProfile -File scripts/Test-Desktop.ps1 -Mode Normal
 rtk proxy powershell -NoProfile -File scripts/Test-Desktop.ps1 -Mode Crash
 ```
 
-Sau khi sửa lỗi icon: 11 unit test qua. Test đọc taskbar thật được đánh dấu ignored
+Sau khi sửa lỗi icon: 12 unit test qua. Test đọc taskbar thật được đánh dấu ignored
 để không phụ thuộc cấu hình máy; đã chạy riêng và xác nhận 11 ứng dụng ghim có icon.
 Các lượt Normal và Crash chạy lại qua trên màn hình 1920×1080, scale 100%.
 Tiến trình chính dùng khoảng 24,5 MB working set trong các mẫu ngắn, chưa cộng guard.

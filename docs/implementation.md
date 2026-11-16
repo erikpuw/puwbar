@@ -57,3 +57,15 @@ Sẽ ghi rõ cách truy cập tray gốc và giới hạn trước khi bàn giao
 - Đối chiếu mod Windows 11 Taskbar Styler 1.11.1 đang cài: sửa XAML của taskbar thật, dùng AcrylicBrush/WindhawkBlur và CornerRadius. Mod đang Disabled=1; không thay đổi cấu hình hoặc nguồn mod.
 - DWM Acrylic được áp dụng cho cửa sổ PuwBar, lớp GDI 32-bit sửa alpha để nội dung còn đọc được. Preview có cửa sổ ứng dụng thông thường để CUA thấy; đã quan sát icon thật, sau đó bỏ mũi tên shortcut. Khoảng đáy 4 DIP. Test Normal/Crash qua, RAM chính 24,45/24,53 MB.
 - Notification tray đầy đủ vẫn chưa có. Chuyển sang sửa taskbar gốc như WinHawk là thay đổi kiến trúc, mâu thuẫn yêu cầu cũ ẩn hoàn toàn taskbar gốc; cần người dùng chốt trước khi can thiệp Explorer.
+
+## Icon tùy chỉnh sau phản hồi tiếp theo
+
+- Người dùng tiếp tục phản ánh icon xấu. Kiểm tra shortcut thấy Edge dùng profile ico,
+  Qoder dùng ico riêng, Task Manager chỉ định resource -30651. Lấy icon từ exe bỏ mất các lựa chọn đó.
+- Đổi sang SHGetFileInfo với SYSICONINDEX, rồi IImageList.GetIcon trên SHIL_EXTRALARGE.
+  Lấy icon gốc 48 px từ cache Shell và không ghép lớp overlay mũi tên.
+- Test tạo shortcut có icon riêng đã đỏ khi lấy icon exe và xanh sau sửa; xác nhận
+  bitmap nguồn ít nhất 48 px. Tổng 12 test tự động qua, test dữ liệu ghim thật chạy riêng qua.
+- Release build lần đầu bị khóa do puwbar.exe cũ đang chạy. Dùng Ctrl+Alt+F12 để thoát,
+  xác minh không còn tiến trình, rồi build thành công. Đã xem ảnh preview mới bằng CUA.
+- Chưa coi icon đã được người dùng duyệt; kính và system tray đầy đủ vẫn chưa hoàn thành.

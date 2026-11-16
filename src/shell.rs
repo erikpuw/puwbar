@@ -9,7 +9,10 @@ use std::{
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::{
     System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER, STGM_READ},
-    UI::Shell::{IShellLinkW, ShellLink},
+    UI::{
+        Controls::{IImageList, ILD_TRANSPARENT},
+        Shell::{IShellLinkW, SHGetImageList, ShellLink, SHIL_EXTRALARGE},
+    },
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -44,6 +47,21 @@ pub fn file_icon(path: &str) -> Icon {
     let path = path.replace('/', "\\");
     let mut info: SHFILEINFOW = unsafe { std::mem::zeroed() };
     unsafe {
+        if SHGetFileInfoW(
+            wide(&path).as_ptr(),
+            0,
+            &mut info,
+            size_of::<SHFILEINFOW>() as u32,
+            SHGFI_SYSICONINDEX,
+        ) != 0
+        {
+            let images: Result<IImageList, _> = SHGetImageList(SHIL_EXTRALARGE as i32);
+            if let Ok(icon) =
+                images.and_then(|images| images.GetIcon(info.iIcon, ILD_TRANSPARENT.0))
+            {
+                return Icon(icon.0);
+            }
+        }
         SHGetFileInfoW(
             wide(&path).as_ptr(),
             0,
@@ -111,7 +129,7 @@ pub fn pinned() -> Vec<Group> {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into(),
-                icon: file_icon(&target),
+                icon: pinned_icon(&launch, &target),
                 launch,
                 windows: Vec::new(),
                 pinned: true,
@@ -131,6 +149,15 @@ pub fn pinned() -> Vec<Group> {
     let order = native_taskbar_order(&groups);
     groups.sort_by_key(|g| pinned_order_rank(&g.name, &order));
     groups
+}
+
+fn pinned_icon(shortcut: &str, target: &str) -> Icon {
+    let icon = file_icon(shortcut);
+    if icon.0.is_null() {
+        file_icon(target)
+    } else {
+        icon
+    }
 }
 
 pub fn native_taskbar_order(pins: &[Group]) -> Vec<String> {
@@ -388,6 +415,62 @@ mod tests {
             !file_icon(&path).0.is_null(),
             "Shell could not read icon from {path}"
         );
+    }
+
+    fn icon_pixels(icon: &Icon) -> (i32, Vec<u8>) {
+        use windows_sys::Win32::Graphics::Gdi::*;
+        unsafe {
+            let mut info: ICONINFO = std::mem::zeroed();
+            assert_ne!(GetIconInfo(icon.0, &mut info), 0);
+            let mut bitmap: BITMAP = std::mem::zeroed();
+            GetObjectW(
+                info.hbmColor,
+                size_of::<BITMAP>() as i32,
+                &mut bitmap as *mut _ as _,
+            );
+            let mut pixels = vec![0u8; (bitmap.bmWidthBytes * bitmap.bmHeight) as usize];
+            assert!(
+                GetBitmapBits(info.hbmColor, pixels.len() as i32, pixels.as_mut_ptr() as _) > 0
+            );
+            DeleteObject(info.hbmColor);
+            DeleteObject(info.hbmMask);
+            (bitmap.bmWidth, pixels)
+        }
+    }
+
+    #[test]
+    fn pinned_icons_preserve_shortcut_customization_at_large_size() {
+        unsafe {
+            windows_sys::Win32::System::Com::CoInitializeEx(null(), 2);
+            let root = std::env::var("SystemRoot").unwrap();
+            let exe = root.clone() + "\\explorer.exe";
+            let custom = root + "\\System32\\shell32.dll";
+            let path = std::env::temp_dir()
+                .join(format!("puwbar-icon-fixture-{}.lnk", std::process::id()));
+            let shortcut = path.to_string_lossy().to_string();
+            let link: IShellLinkW =
+                CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).unwrap();
+            link.SetPath(PCWSTR(wide(&exe).as_ptr())).unwrap();
+            link.SetIconLocation(PCWSTR(wide(&custom).as_ptr()), 3)
+                .unwrap();
+            let persist: IPersistFile = link.cast().unwrap();
+            persist
+                .Save(PCWSTR(wide(&shortcut).as_ptr()), true)
+                .unwrap();
+            let chosen = icon_pixels(&pinned_icon(&shortcut, &exe));
+            let default = icon_pixels(&file_icon(&exe));
+            let _ = std::fs::remove_file(path);
+            windows_sys::Win32::System::Com::CoUninitialize();
+            assert_ne!(
+                chosen.1, default.1,
+                "Pinned icon must use the shortcut's custom icon"
+            );
+            assert!(
+                chosen.0 >= 48,
+                "Use at least 48px source icons, got {}",
+                chosen.0
+            );
+        }
     }
 
     #[test]
