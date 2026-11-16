@@ -1,7 +1,7 @@
 # PuwBar
 
 Thanh ứng dụng native cho Windows, viết bằng Rust. Dock tối, bo góc mềm, cao 48 DIP
-và cách đáy màn hình 2 DIP. Cụm trạng thái nằm riêng bên phải.
+và cách đáy màn hình 4 DIP. Cụm trạng thái nằm riêng bên phải.
 
 Đây là bản thử nghiệm 0.1. PuwBar đã ẩn và khôi phục taskbar gốc trong các lượt thử
 trên máy phát triển, kể cả khi tiến trình chính bị buộc dừng. Chưa thay thế đầy đủ
@@ -27,7 +27,9 @@ phát triển được chạy khi WinHawk vẫn hoạt động.
 
 - Start mở menu Start của Windows.
 - Ứng dụng ghim được đọc từ shortcut taskbar Windows khi khởi động. Các thay đổi
-  ghim trên Windows được nhận ở lần mở PuwBar tiếp theo.
+  ghim trên Windows được nhận ở lần mở PuwBar tiếp theo. Thứ tự lấy từ dữ liệu
+  `Taskband\Favorites` của Explorer; nếu định dạng thay đổi, các shortcut không tìm
+  thấy vẫn được giữ ở cuối danh sách. PuwBar chỉ đọc dữ liệu này.
 - Bấm ứng dụng chưa chạy để mở. Bấm ứng dụng có một cửa sổ để chuyển tới hoặc thu nhỏ.
   Nếu có nhiều cửa sổ, menu cho phép chọn từng cửa sổ.
 - Khi hết chiều ngang, các ứng dụng dư vào nút `…`. Dock chừa ít nhất 16 DIP trước
@@ -64,8 +66,9 @@ Chưa có xem trước cửa sổ, kéo thả, chỉnh ghim trong PuwBar, quick 
 Start menu riêng hoặc tự khởi động. Đổi cấu hình màn hình/DPI khi đang chạy sẽ cho
 PuwBar thoát và khôi phục taskbar; mở lại để nhận bố cục mới.
 
-Hiệu ứng hiện tại là nền tối trong suốt nhẹ vẽ bằng GDI và icon hệ thống. Chưa có blur
-kính mờ như ảnh concept. Thiết kế ưu tiên kiểm chứng vòng đời và khôi phục trước.
+Nền dùng Acrylic của DWM trên Windows 11 có hỗ trợ system backdrop, với lớp vẽ GDI
+32-bit giữ alpha cho nền kính và icon. Khi DWM không hỗ trợ, dùng nền tối đặc.
+Màu Acrylic phụ thuộc thiết lập và nền màn hình; ảnh concept không phải ảnh chụp bản chạy.
 
 ## Build và kiểm tra
 
@@ -87,11 +90,16 @@ rtk proxy powershell -NoProfile -File scripts/Test-Desktop.ps1 -Mode Normal
 rtk proxy powershell -NoProfile -File scripts/Test-Desktop.ps1 -Mode Crash
 ```
 
-Kết quả ban đầu: 8 unit test qua; ba chế độ desktop qua trên màn hình 1920×1080 ở
-scale 100%. Tiến trình chính dùng khoảng 20–21 MB working set trong các mẫu ngắn.
-Số này chưa cộng guard; chưa có benchmark tải dài hoặc kiểm thử nhiều màn hình thật.
-Các thao tác bấm Start/menu chưa được xác minh bằng công cụ tự động vì cửa sổ kiểu
-tool window không được công cụ điều khiển desktop hiện tại liệt kê.
+Sau khi sửa lỗi icon: 11 unit test qua. Test đọc taskbar thật được đánh dấu ignored
+để không phụ thuộc cấu hình máy; đã chạy riêng và xác nhận 11 ứng dụng ghim có icon.
+Các lượt Normal và Crash chạy lại qua trên màn hình 1920×1080, scale 100%.
+Tiến trình chính dùng khoảng 24,5 MB working set trong các mẫu ngắn, chưa cộng guard.
+Chưa có benchmark tải dài hoặc kiểm thử nhiều màn hình thật.
+
+Preview là cửa sổ ứng dụng thông thường để công cụ desktop có thể xem hình và các nút;
+chế độ thật vẫn dùng tool window. Đã quan sát icon thật trong preview, chưa xác minh
+đầy đủ thao tác Start/menu. Preview luôn hiện để có thể kiểm tra ngay cả khi một cửa
+sổ khác đang phủ toàn màn hình.
 
 `--diagnose` ghi thông tin màn hình và snapshot vào tệp `.diagnostics.txt` cạnh exe.
 `--test-seconds N` tự thoát sau N giây để phục vụ kiểm thử có thời hạn.

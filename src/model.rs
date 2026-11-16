@@ -11,6 +11,8 @@ pub struct Layout {
     pub overflow: bool,
 }
 
+pub const BOTTOM_GAP_DIP: i32 = 4;
+
 pub fn layout(width: i32, height: i32, dpi: u32, apps: usize) -> Option<Layout> {
     if !(48..=768).contains(&dpi) || height <= 0 {
         return None;
@@ -21,7 +23,7 @@ pub fn layout(width: i32, height: i32, dpi: u32, apps: usize) -> Option<Layout> 
     let tray_x = width - margin - tray_width;
     let available = tray_x - gap - margin;
     let slots = ((available - 2 * padding) / slot).max(0) as usize;
-    if slots < 3 || height < bar_height + px(2) {
+    if slots < 3 || height < bar_height + px(BOTTOM_GAP_DIP) {
         return None;
     }
     let overflow = apps + 1 > slots;
@@ -36,7 +38,7 @@ pub fn layout(width: i32, height: i32, dpi: u32, apps: usize) -> Option<Layout> 
         dock_width,
         tray_x,
         tray_width,
-        y: height - px(2) - bar_height,
+        y: height - px(BOTTOM_GAP_DIP) - bar_height,
         height: bar_height,
         slot,
         capacity,
@@ -45,7 +47,20 @@ pub fn layout(width: i32, height: i32, dpi: u32, apps: usize) -> Option<Layout> 
 }
 
 pub fn group_key(path: &str, app_id: &str) -> String {
-    format!("{}|{}", path.to_lowercase(), app_id)
+    format!("{}|{}", path.replace('/', "\\").to_lowercase(), app_id)
+}
+
+pub fn pinned_order_rank(name: &str, order: &[String]) -> usize {
+    let name = name.to_lowercase();
+    order
+        .iter()
+        .position(|item| {
+            let item = item.to_lowercase();
+            item == name
+                || item.starts_with(&format!("{name} -"))
+                || item.starts_with(&format!("{name},"))
+        })
+        .unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]
@@ -53,10 +68,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dock_is_48_high_and_two_from_bottom() {
+    fn dock_is_48_high_and_four_from_bottom() {
         let l = layout(1920, 1080, 96, 8).expect("normal desktop");
         assert_eq!(l.height, 48);
-        assert_eq!(l.y + l.height, 1078);
+        assert_eq!(l.y + l.height, 1076);
         assert!(!l.overflow);
         assert_eq!(l.capacity, 8);
     }
@@ -81,7 +96,7 @@ mod tests {
     fn scaling_preserves_bottom_gap() {
         let l = layout(2560, 1440, 144, 10).unwrap();
         assert_eq!(l.height, 72);
-        assert_eq!(l.y + l.height, 1437);
+        assert_eq!(l.y + l.height, 1434);
     }
 
     #[test]
@@ -94,6 +109,30 @@ mod tests {
     #[test]
     fn application_identity_is_case_insensitive() {
         assert_eq!(group_key("C:\\APP.EXE", ""), group_key("c:\\app.exe", ""));
+    }
+
+    #[test]
+    fn native_and_shortcut_path_separators_identify_the_same_app() {
+        assert_eq!(
+            group_key("C:/Windows/explorer.exe", ""),
+            group_key("C:\\Windows\\explorer.exe", "")
+        );
+    }
+
+    #[test]
+    fn pins_follow_native_taskbar_order_instead_of_alphabetical_order() {
+        let order = vec![
+            "Microsoft Edge - 2 running windows".into(),
+            "File Explorer".into(),
+            "Visual Studio Code".into(),
+        ];
+        let mut pins = vec!["File Explorer", "Visual Studio Code", "Microsoft Edge"];
+        pins.sort_by_key(|name| pinned_order_rank(name, &order));
+        assert_eq!(
+            pins,
+            vec!["Microsoft Edge", "File Explorer", "Visual Studio Code"]
+        );
+        assert_eq!(pinned_order_rank("Not Installed", &order), usize::MAX);
     }
 
     #[test]

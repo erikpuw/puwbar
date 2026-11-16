@@ -3,7 +3,7 @@
 ## Thiết kế đã thống nhất
 
 Rust native, dock kính khói bo mềm, có Start và cụm trạng thái riêng. Dock cao 48 DIP,
-cách đáy 2 DIP, icon 28 DIP. Tỷ lệ tăng theo DPI. Gom cửa sổ theo ứng dụng, phần dư
+cách đáy 4 DIP sau phản hồi chạy thật, icon 28 DIP. Tỷ lệ tăng theo DPI. Gom cửa sổ theo ứng dụng, phần dư
 vào menu, luôn chừa chỗ cho cụm trạng thái. Taskbar Windows phải ẩn khi PuwBar hoạt động.
 
 ## Kế hoạch thực hiện trong phiên
@@ -48,3 +48,12 @@ Sẽ ghi rõ cách truy cập tray gốc và giới hạn trước khi bàn giao
 - Rà soát độc lập bằng model tiết kiệm: không có lỗi chắc chắn trong các đường restore, callback RefCell và menu đã xem; chưa bao phủ toàn bộ GDI và nhóm ứng dụng.
 - Kiểm tra cuối: fmt, 8 test, Clippy và release build qua; Normal và Crash chạy lại đều qua (20,50 và 20,55 MB RAM cho tiến trình chính). PE import không chứa vcruntime, msvcp hoặc ucrtbase; clean Windows vẫn chưa thử.
 - Graph: toàn bộ 15 tệp được stage. `detect-changes --scope all` không chạy được vì repo mới chưa có HEAD; dùng scope staged để phân tích toàn bộ thay đổi ban đầu. Graph báo risk high cho 145 symbol/12 flow của ứng dụng mới. Index có giới hạn coverage flow nên không coi các luồng vắng mặt là an toàn.
+
+## Phản hồi về icon và tray, 2026-11-17
+
+- Người dùng chỉ ra chữ cái thay icon, sai ứng dụng ghim, khoảng đáy quá sát và tray thiếu. Đã tái hiện test đỏ cho Shell nhận đường dẫn `/`, chuẩn hóa identity và thứ tự ghim; sửa xong các test qua.
+- Nguyên nhân icon: filesystem Rust nhận `/`, Shell không nhận cùng đường dẫn đó. Đã chuẩn hóa sang `\`, lấy icon từ ứng dụng đích và bỏ nhánh hiển thị chữ cái. File Explorer namespace shortcut cần nhận đúng exe để không tách thành nhóm khác.
+- UI Automation taskbar trên máy chỉ trả hai node. Dừng dùng hướng này và bỏ mã điều tra. Taskband Favorites chứa tên shortcut theo vị trí; chỉ đọc và giữ fallback cho shortcut không tìm thấy. Đã xác nhận thứ tự Edge, Explorer, Notepad++, VS Code và các ứng dụng còn lại.
+- Đối chiếu mod Windows 11 Taskbar Styler 1.11.1 đang cài: sửa XAML của taskbar thật, dùng AcrylicBrush/WindhawkBlur và CornerRadius. Mod đang Disabled=1; không thay đổi cấu hình hoặc nguồn mod.
+- DWM Acrylic được áp dụng cho cửa sổ PuwBar, lớp GDI 32-bit sửa alpha để nội dung còn đọc được. Preview có cửa sổ ứng dụng thông thường để CUA thấy; đã quan sát icon thật, sau đó bỏ mũi tên shortcut. Khoảng đáy 4 DIP. Test Normal/Crash qua, RAM chính 24,45/24,53 MB.
+- Notification tray đầy đủ vẫn chưa có. Chuyển sang sửa taskbar gốc như WinHawk là thay đổi kiến trúc, mâu thuẫn yêu cầu cũ ẩn hoàn toàn taskbar gốc; cần người dùng chốt trước khi can thiệp Explorer.

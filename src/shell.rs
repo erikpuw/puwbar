@@ -1,5 +1,5 @@
 use crate::desktop::{class_name, wide};
-use puwbar::model::group_key;
+use puwbar::model::{group_key, pinned_order_rank};
 use std::{
     collections::HashMap,
     mem::size_of,
@@ -40,10 +40,12 @@ pub struct Group {
 }
 
 pub fn file_icon(path: &str) -> Icon {
+    // Shell APIs reject forward slashes even though Rust's filesystem accepts them.
+    let path = path.replace('/', "\\");
     let mut info: SHFILEINFOW = unsafe { std::mem::zeroed() };
     unsafe {
         SHGetFileInfoW(
-            wide(path).as_ptr(),
+            wide(&path).as_ptr(),
             0,
             &mut info,
             size_of::<SHFILEINFOW>() as u32,
@@ -65,7 +67,7 @@ pub fn pinned() -> Vec<Group> {
             .collect::<Vec<_>>();
         entries.sort();
         for path in entries {
-            let launch = path.to_string_lossy().into_owned();
+            let launch = path.to_string_lossy().replace('/', "\\");
             let target = unsafe {
                 let link: Result<IShellLinkW, _> =
                     CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER);
@@ -78,7 +80,22 @@ pub fn pinned() -> Vec<Group> {
                         let mut buf = [0u16; 32768];
                         link.GetPath(&mut buf, null_mut(), 0).ok()?;
                         let len = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
-                        Some(String::from_utf16_lossy(&buf[..len]))
+                        if len > 0 {
+                            return Some(String::from_utf16_lossy(&buf[..len]));
+                        }
+                        let mut icon_path = [0u16; 1024];
+                        let mut index = 0;
+                        link.GetIconLocation(&mut icon_path, &mut index).ok()?;
+                        let len = icon_path
+                            .iter()
+                            .position(|c| *c == 0)
+                            .unwrap_or(icon_path.len());
+                        let icon_path = String::from_utf16_lossy(&icon_path[..len]);
+                        if icon_path.to_lowercase().ends_with("\\explorer.exe") {
+                            Some(std::env::var("SystemRoot").ok()? + "\\explorer.exe")
+                        } else {
+                            None
+                        }
                     })
                     .filter(|p| !p.is_empty())
                     .unwrap_or_else(|| launch.clone())
@@ -94,7 +111,7 @@ pub fn pinned() -> Vec<Group> {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into(),
-                icon: file_icon(&launch),
+                icon: file_icon(&target),
                 launch,
                 windows: Vec::new(),
                 pinned: true,
@@ -111,7 +128,57 @@ pub fn pinned() -> Vec<Group> {
             pinned: true,
         });
     }
+    let order = native_taskbar_order(&groups);
+    groups.sort_by_key(|g| pinned_order_rank(&g.name, &order));
     groups
+}
+
+pub fn native_taskbar_order(pins: &[Group]) -> Vec<String> {
+    unsafe {
+        use windows_sys::Win32::System::Registry::*;
+        let key = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Taskband");
+        let value = wide("Favorites");
+        let mut size = 0u32;
+        if RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_BINARY,
+            null_mut(),
+            null_mut(),
+            &mut size,
+        ) != ERROR_SUCCESS
+            || size > 1024 * 1024
+        {
+            return Vec::new();
+        }
+        let mut data = vec![0u8; size as usize];
+        if RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_BINARY,
+            null_mut(),
+            data.as_mut_ptr() as _,
+            &mut size,
+        ) != ERROR_SUCCESS
+        {
+            return Vec::new();
+        }
+        let mut order = Vec::new();
+        // shortcut: Taskband is an Explorer-owned format; retain unmatched pins if it changes.
+        for pin in pins {
+            let needle: Vec<u8> = wide(&format!("{}.lnk", pin.name))
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            if let Some(offset) = data.windows(needle.len()).position(|slice| slice == needle) {
+                order.push((offset, pin.name.clone()));
+            }
+        }
+        order.sort_by_key(|(offset, _)| *offset);
+        order.into_iter().map(|(_, name)| name).collect()
+    }
 }
 
 pub fn refresh(groups: &mut Vec<Group>) {
@@ -150,6 +217,9 @@ pub fn refresh(groups: &mut Vec<Group>) {
         let len = GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32);
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == std::process::id() {
+            return 1;
+        }
         (&mut *(data as *mut Vec<Window>)).push(Window {
             hwnd,
             title: String::from_utf16_lossy(&title[..len.max(0) as usize]),
@@ -304,5 +374,43 @@ pub fn fullscreen(monitor: &RECT) -> bool {
             && rect.top <= monitor.top
             && rect.right >= monitor.right
             && rect.bottom >= monitor.bottom
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_icon_accepts_paths_built_with_forward_slashes() {
+        let path = std::env::var("SystemRoot").unwrap().replace('\\', "/") + "/explorer.exe";
+        assert!(
+            !file_icon(&path).0.is_null(),
+            "Shell could not read icon from {path}"
+        );
+    }
+
+    #[test]
+    #[ignore = "reads this Windows user's real taskbar; run explicitly on the desktop"]
+    fn native_pins_have_icons_and_follow_the_live_taskbar() {
+        unsafe {
+            windows_sys::Win32::System::Com::CoInitializeEx(null(), 2);
+        }
+        let pins = pinned();
+        let order = native_taskbar_order(&pins);
+        assert!(!order.is_empty(), "Native taskbar buttons were not found");
+        println!("native order: {order:?}");
+        for p in &pins {
+            println!(
+                "pin: {} icon={} target={}",
+                p.name,
+                !p.icon.0.is_null(),
+                p.key
+            );
+            assert!(!p.icon.0.is_null(), "{}", p.name);
+        }
+        unsafe {
+            windows_sys::Win32::System::Com::CoUninitialize();
+        }
     }
 }

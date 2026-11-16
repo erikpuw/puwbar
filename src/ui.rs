@@ -2,7 +2,7 @@ use crate::{
     desktop::{self, wide, Snapshot},
     shell::{self, Group},
 };
-use puwbar::model::{layout, Layout};
+use puwbar::model::{layout, Layout, BOTTOM_GAP_DIP};
 use std::{
     cell::RefCell,
     mem::size_of,
@@ -11,7 +11,7 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    Graphics::Gdi::*,
+    Graphics::{Dwm::*, Gdi::*},
     System::{Com::*, LibraryLoader::*, Power::*, SystemInformation::*, Threading::*},
     UI::{
         Accessibility::*, Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*,
@@ -119,8 +119,8 @@ unsafe fn run_session(preview: bool, seconds: Option<u32>) -> Result<(), String>
     let mut panels = Vec::new();
     for monitor in desktop::monitors() {
         let r = monitor.rcMonitor;
-        let dock = create_window(&class, "PuwBar — ứng dụng", instance);
-        let tray = create_window(&class, "PuwBar — trạng thái", instance);
+        let dock = create_window(&class, "PuwBar — ứng dụng", instance, preview);
+        let tray = create_window(&class, "PuwBar — trạng thái", instance, preview);
         if dock.is_null() || tray.is_null() {
             if !dock.is_null() {
                 DestroyWindow(dock);
@@ -285,9 +285,13 @@ unsafe fn run_session(preview: bool, seconds: Option<u32>) -> Result<(), String>
     Ok(())
 }
 
-unsafe fn create_window(class: &[u16], title: &str, instance: HINSTANCE) -> HWND {
+unsafe fn create_window(class: &[u16], title: &str, instance: HINSTANCE, preview: bool) -> HWND {
     let hwnd = CreateWindowExW(
-        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+        if preview {
+            WS_EX_APPWINDOW
+        } else {
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+        },
         class.as_ptr(),
         wide(title).as_ptr(),
         WS_POPUP | WS_CLIPCHILDREN,
@@ -301,7 +305,30 @@ unsafe fn create_window(class: &[u16], title: &str, instance: HINSTANCE) -> HWND
         null(),
     );
     if !hwnd.is_null() {
-        SetLayeredWindowAttributes(hwnd, 0, 245, LWA_ALPHA);
+        let dark = 1i32;
+        let backdrop = 3i32;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            &dark as *const _ as _,
+            4,
+        );
+        let margins = MARGINS {
+            cxLeftWidth: -1,
+            cxRightWidth: -1,
+            cyTopHeight: -1,
+            cyBottomHeight: -1,
+        };
+        if DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE as u32,
+            &backdrop as *const _ as _,
+            4,
+        ) >= 0
+            && DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0
+        {
+            SetPropW(hwnd, wide("PuwBar.Glass").as_ptr(), 1usize as HANDLE);
+        }
     }
     hwnd
 }
@@ -417,7 +444,7 @@ unsafe fn reserve(p: &Panel) {
     data.uEdge = ABE_BOTTOM;
     data.rc = p.monitor;
     SHAppBarMessage(ABM_QUERYPOS, &mut data);
-    data.rc.top = data.rc.bottom - p.layout.height - 2 * p.dpi as i32 / 96;
+    data.rc.top = data.rc.bottom - p.layout.height - BOTTOM_GAP_DIP * p.dpi as i32 / 96;
     SHAppBarMessage(ABM_SETPOS, &mut data);
     position(p);
 }
@@ -724,7 +751,7 @@ fn tick() {
         s.tray_text = text;
         unsafe {
             for p in &s.panels {
-                let show = !shell::fullscreen(&p.monitor);
+                let show = s.preview || !shell::fullscreen(&p.monitor);
                 for h in [p.dock, p.tray] {
                     if (IsWindowVisible(h) != 0) != show {
                         ShowWindow(h, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
@@ -945,16 +972,107 @@ unsafe fn paint_background(hwnd: HWND) {
     let dc = BeginPaint(hwnd, &mut ps);
     let mut rect: RECT = std::mem::zeroed();
     GetClientRect(hwnd, &mut rect);
-    let brush = CreateSolidBrush(rgb(24, 33, 47));
-    FillRect(dc, &rect, brush);
-    DeleteObject(brush);
+    let canvas = Surface::new(dc, rect.right, rect.bottom);
+    let target = canvas.as_ref().map(|s| s.dc).unwrap_or(dc);
+    if GetPropW(hwnd, wide("PuwBar.Glass").as_ptr()).is_null() {
+        let brush = CreateSolidBrush(rgb(24, 33, 47));
+        FillRect(target, &rect, brush);
+        DeleteObject(brush);
+    }
     let pen = CreatePen(PS_SOLID, 1, rgb(65, 77, 93));
-    let old = SelectObject(dc, pen);
-    MoveToEx(dc, 16, 0, null_mut());
-    LineTo(dc, rect.right - 16, 0);
-    SelectObject(dc, old);
+    let old = SelectObject(target, pen);
+    let old_brush = SelectObject(target, GetStockObject(HOLLOW_BRUSH));
+    let radius = 32 * GetDpiForWindow(hwnd).max(96) as i32 / 96;
+    RoundRect(target, 0, 0, rect.right, rect.bottom, radius, radius);
+    SelectObject(target, old_brush);
+    SelectObject(target, old);
     DeleteObject(pen);
+    if let Some(canvas) = canvas {
+        canvas.present(dc);
+    }
     EndPaint(hwnd, &ps);
+}
+
+struct Surface {
+    dc: HDC,
+    bitmap: HBITMAP,
+    old: HGDIOBJ,
+    pixels: *mut u32,
+    width: i32,
+    height: i32,
+}
+
+impl Surface {
+    unsafe fn new(target: HDC, width: i32, height: i32) -> Option<Self> {
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        let dc = CreateCompatibleDC(target);
+        if dc.is_null() {
+            return None;
+        }
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                ..std::mem::zeroed()
+            },
+            ..std::mem::zeroed()
+        };
+        let mut pixels = null_mut();
+        let bitmap = CreateDIBSection(target, &info, DIB_RGB_COLORS, &mut pixels, null_mut(), 0);
+        if bitmap.is_null() {
+            DeleteDC(dc);
+            return None;
+        }
+        let old = SelectObject(dc, bitmap);
+        std::ptr::write_bytes(pixels, 0, (width * height * 4) as usize);
+        Some(Self {
+            dc,
+            bitmap,
+            old,
+            pixels: pixels as _,
+            width,
+            height,
+        })
+    }
+
+    unsafe fn present(&self, target: HDC) {
+        // GDI writes RGB without alpha; preserve transparent glass and make painted content visible.
+        GdiFlush();
+        for pixel in
+            std::slice::from_raw_parts_mut(self.pixels, (self.width * self.height) as usize)
+        {
+            if *pixel & 0xff000000 == 0 && *pixel & 0x00ffffff != 0 {
+                *pixel |= 0xff000000;
+            }
+        }
+        BitBlt(
+            target,
+            0,
+            0,
+            self.width,
+            self.height,
+            self.dc,
+            0,
+            0,
+            SRCCOPY,
+        );
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dc, self.old);
+            DeleteObject(self.bitmap);
+            DeleteDC(self.dc);
+        }
+    }
 }
 
 const fn rgb(r: u8, g: u8, b: u8) -> u32 {
@@ -962,20 +1080,25 @@ const fn rgb(r: u8, g: u8, b: u8) -> u32 {
 }
 
 unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
-    let dc = draw.hDC;
+    let canvas = Surface::new(draw.hDC, draw.rcItem.right, draw.rcItem.bottom);
+    let dc = canvas.as_ref().map(|s| s.dc).unwrap_or(draw.hDC);
     let r = draw.rcItem;
     let dpi = GetDpiForWindow(draw.hwndItem).max(96) as i32;
     let px = |n| n * dpi / 96;
     let pressed = draw.itemState & ODS_SELECTED != 0;
     let focused = draw.itemState & ODS_FOCUS != 0;
-    let color = if pressed {
-        rgb(55, 68, 86)
-    } else {
-        rgb(24, 33, 47)
-    };
-    let bg = CreateSolidBrush(color);
-    FillRect(dc, &r, bg);
-    DeleteObject(bg);
+    if pressed
+        || GetPropW(GetParent(draw.hwndItem), wide("PuwBar.Glass").as_ptr()).is_null()
+        || canvas.is_none()
+    {
+        let bg = CreateSolidBrush(if pressed {
+            rgb(55, 68, 86)
+        } else {
+            rgb(24, 33, 47)
+        });
+        FillRect(dc, &r, bg);
+        DeleteObject(bg);
+    }
     let center = (r.right + r.left) / 2;
     let y = (r.bottom - px(28)) / 2;
     let id = draw.CtlID as usize;
@@ -1057,13 +1180,16 @@ unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
                         DI_NORMAL,
                     );
                 } else {
-                    text(
+                    DrawIconEx(
                         dc,
-                        &g.name.chars().take(1).collect::<String>(),
-                        r,
-                        px(20),
-                        "Segoe UI",
-                        rgb(210, 223, 240),
+                        center - px(14),
+                        y,
+                        LoadIconW(null_mut(), IDI_APPLICATION),
+                        px(28),
+                        px(28),
+                        0,
+                        null_mut(),
+                        DI_NORMAL,
                     );
                 }
                 let foreground = GetForegroundWindow();
@@ -1102,6 +1228,9 @@ unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
             bottom: r.bottom - 2,
         };
         DrawFocusRect(dc, &inset);
+    }
+    if let Some(canvas) = canvas {
+        canvas.present(draw.hDC);
     }
 }
 
