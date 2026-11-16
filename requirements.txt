@@ -1,0 +1,4 @@
+# Rust dependencies are declared and pinned by Cargo.toml and Cargo.lock.
+# No Python or Node.js runtime dependencies.
+# Cargo: windows-sys = 0.61.2
+# Cargo: windows = 0.61.3
