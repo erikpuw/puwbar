@@ -68,6 +68,12 @@ struct SavedProp {
     bool wasUnset = false;
 };
 
+struct SavedPropCallback {
+    winrt::weak_ref<xaml::DependencyObject> target;
+    xaml::DependencyProperty prop{nullptr};
+    int64_t token = 0;
+};
+
 // Minimal D2D1 effect wrappers for always-on fast Backdrop Gaussian blur + glass tint.
 struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
     winrt::hstring m_name{L"Blur"};
@@ -568,10 +574,10 @@ private:
                 setProp(
                     xaml::FrameworkElement::VerticalAlignmentProperty(),
                     winrt::box_value(startAligned ? xaml::VerticalAlignment::Top : xaml::VerticalAlignment::Center));
-                // Keep top margin minimal (8px) so vertical dock fits all icons without premature '...' overflow.
+                // SystemTrayFrameGrid already has its own vertical slot; keep vertical margin tight (4px) so all icons fit without premature '...' overflow.
                 setProp(
                     xaml::FrameworkElement::MarginProperty(),
-                    winrt::box_value(xaml::Thickness{0.0, 8.0, 0.0, 260.0}));
+                    winrt::box_value(xaml::Thickness{0.0, 4.0, 0.0, 4.0}));
             } else {
                 setProp(xaml::FrameworkElement::WidthProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
                 setProp(xaml::FrameworkElement::HeightProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
@@ -722,11 +728,32 @@ private:
             SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            SaveAndSet(obj, controls::Control::PaddingProperty(), winrt::box_value(xaml::Thickness{2.0, 4.0, 2.0, 4.0}));
             return;
         }
 
         if (name == L"RunningIndicator") {
             ApplyLayoutProps(obj, type, name, parentType, true);
+            // Keep right-edge indicator locked on Right even when VisualStateManager updates active app state.
+            try {
+                auto token = obj.RegisterPropertyChangedCallback(
+                    xaml::FrameworkElement::HorizontalAlignmentProperty(),
+                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
+                        try {
+                            if (GetTaskbarEdge() == TaskbarEdge::Right) {
+                                auto cur = winrt::unbox_value_or<xaml::HorizontalAlignment>(
+                                    sender.GetValue(dp), xaml::HorizontalAlignment::Center);
+                                if (cur != xaml::HorizontalAlignment::Right) {
+                                    sender.SetValue(dp, winrt::box_value(xaml::HorizontalAlignment::Right));
+                                }
+                            }
+                        } catch (...) {
+                        }
+                    });
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_propCallbacks.push_back({winrt::make_weak(obj), xaml::FrameworkElement::HorizontalAlignmentProperty(), token});
+            } catch (...) {
+            }
             return;
         }
 
@@ -754,12 +781,22 @@ private:
     }
 
     void RestoreAllOnUiThread() {
+        std::vector<SavedPropCallback> callbacks;
         std::vector<winrt::weak_ref<xaml::UIElement>> implicits;
         std::vector<SavedProp> items;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            callbacks.swap(m_propCallbacks);
             implicits.swap(m_implicitTargets);
             items.swap(m_saved);
+        }
+        for (auto& cb : callbacks) {
+            try {
+                if (auto obj = cb.target.get()) {
+                    obj.UnregisterPropertyChangedCallback(cb.prop, cb.token);
+                }
+            } catch (...) {
+            }
         }
         for (auto& imp : implicits) {
             try {
@@ -1020,6 +1057,7 @@ private:
     std::unordered_map<InstanceHandle, ElementMeta> m_meta;
     std::vector<TrackedElement> m_tracked;
     std::vector<SavedProp> m_saved;
+    std::vector<SavedPropCallback> m_propCallbacks;
     std::vector<winrt::weak_ref<xaml::UIElement>> m_implicitTargets;
     std::atomic<bool> m_stopWatcher{false};
     std::thread m_watcher;
