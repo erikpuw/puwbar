@@ -1,37 +1,46 @@
-# PuwBar
+<p align="center">
+  <img src="assets/puwbar.png" width="112" alt="PuwBar icon">
+</p>
 
-[Tiếng Việt](README.md)
+<h1 align="center">PuwBar</h1>
 
-PuwBar is a lightweight Windows 11 utility that styles the native taskbar into separate floating frosted glass pills for the app dock, System Tray, and Widgets button. Every native Windows 11 taskbar feature keeps working as usual, including animated tray icons (such as RunCat 365), native right-click menus, the overflow icon grid, Start menu, and window previews.
+<p align="center"><b>Floating frosted glass taskbar for Windows 11, with every native feature intact.</b></p>
 
-## How it works
+<p align="center">
+  Splits the native taskbar into separate rounded glass pills for apps, the System Tray, and Widgets.<br>
+  Written in Rust + C++/WinRT, single ~870 KB exe, no Windhawk, no Visual C++ Redistributable to install.
+</p>
 
-PuwBar pairs a Rust controller with a small C++/WinRT TAP library (`puwbar_tap.dll`) embedded directly inside `puwbar.exe`. At launch, the binary extracts the DLL to `%TEMP%` and calls `InitializeXamlDiagnosticsEx` from `Windows.UI.Xaml.dll` to attach to the live XAML tree inside `explorer.exe`.
+<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puwbar/releases">Latest: v1.0.1</a></p>
 
-Because it modifies properties on the existing Windows 11 taskbar tree, PuwBar uses roughly 1.2 MB of RAM at idle, leaves Explorer running, and requires no third-party modding tools such as Windhawk. Exiting restores every modified XAML property immediately without restarting Explorer.
+> **Download only from the author's source.** PuwBar is published by its author (erikpuw) only at [github.com/erikpuw/puwbar](https://github.com/erikpuw/puwbar). A copy from anywhere else (file-sharing sites, other repositories, repackaged builds, files sent over the internet) is not controlled by the author and comes with no guarantee: it may have been modified or had code added. Use only the build in this repository's [Releases](https://github.com/erikpuw/puwbar/releases).
 
-## Highlights (v1.0.1)
+## Features
 
-- Single standalone executable (`puwbar.exe`) with the TAP DLL and app icon embedded.
-- Real-time frosted glass via `Windows.UI.Composition` (`CreateBackdropBrush` + speed-optimized `D2D1GaussianBlur`), 15% white hairline border, and 12px rounded corners.
-- Follows all four taskbar positions (Bottom, Top, Left, Right) and Left/Center alignment from Windows Settings in real time.
-- Keeps the active-app indicator aligned to the right edge on vertical right-docked taskbars.
-- Applies matching glass styling to the System Tray pill, overflow flyouts (`^`, `...`), and Widgets button when enabled in Windows.
-- Smooth 300ms horizontal slide synced with native app launch animations and locked to the monitor refresh rate via DWM VSync.
-- System Tray menu with Vietnamese / English language switcher, About dialog, Reapply action, and immediate-logon Task Scheduler autostart (zero startup delay, falls back to `HKCU\...\Run` if UAC is declined).
+| Feature | What it does |
+|---|---|
+| **Real frosted glass** | Real-time backdrop blur via `Windows.UI.Composition` (`CreateBackdropBrush` + `D2D1GaussianBlur`), 15% white hairline border, 12px rounded corners. |
+| **Native behavior intact** | Never hides or replaces Explorer. Keeps live tray animations (RunCat 365, UniKey), native right-click menus, the overflow icon grid, Start menu, and window previews. |
+| **All 4 edges & Left/Center** | Adapts live when switching taskbar position (**Bottom / Top / Left / Right**) or alignment (**Left / Center**) in Windows Settings. |
+| **Right-edge indicator fix** | Keeps the running-app indicator locked to the right edge on vertical right-docked taskbars. |
+| **Matching glass everywhere** | Styles the System Tray pill, overflow flyouts (`^`, `...`), and Widgets button (shown automatically when Widgets is enabled in Windows). |
+| **Smooth horizontal slide** | 300ms ease-in-out slide timed with Windows 11's app launch animation, VSync-locked to the monitor refresh rate. |
+| **Light & single file** | About 1.2 MB of RAM and 0% CPU at idle. The TAP DLL and icon are embedded inside `puwbar.exe`; exiting restores every XAML property cleanly. |
+| **Tray menu** | Start with Windows, Reapply taskbar glass, Language (Vietnamese / English), About, Exit (`Ctrl+Alt+F12`). |
+
+**Start with Windows** asks for administrator permission once to create an immediate-logon Task Scheduler task (no startup delay, retries up to 30 seconds while Explorer XAML initializes). If UAC is declined, it falls back to `HKCU\...\Run`. Untick it to turn it off.
 
 ## Usage
 
-1. Download `puwbar.exe` from [Releases](https://github.com/erikpuw/puwbar/releases) or build from source.
-2. Place `puwbar.exe` in a permanent folder and run it (no admin rights required for normal use).
-3. Click the PuwBar icon in the System Tray to enable **Start with Windows** (prompts UAC once to register an immediate-logon Task Scheduler task), switch language, or open **About PuwBar**.
-4. Press `Ctrl+Alt+F12` or pick **Exit PuwBar** from the tray menu to restore the default taskbar and quit.
+1. Download `puwbar.exe` from [Releases](https://github.com/erikpuw/puwbar/releases), put it in a permanent folder, and run it.
+2. Click the PuwBar icon in the System Tray to turn on **Start with Windows** or switch language.
+3. Press `Ctrl+Alt+F12` or pick **Exit PuwBar** in the tray menu to restore the default taskbar without restarting Explorer.
 
-> If you have a taskbar styling mod enabled in Windhawk (such as `Windows 11 Taskbar Styler`), disable it before running PuwBar so both do not overwrite the same XAML elements.
+If a taskbar styling mod is active in Windhawk (such as `Windows 11 Taskbar Styler`), disable it before running PuwBar so both do not overwrite the same XAML elements.
 
 ## Building from source
 
-Requirements: Windows 11 (x64), Rust stable, MSVC Build Tools, and Windows 10/11 SDK (`10.0.26100.0` or newer with `xamlom.h` and C++/WinRT headers).
+Requires Windows 11 (x64), Rust stable, MSVC Build Tools, and Windows SDK (`10.0.26100.0` or newer with `xamlom.h` and C++/WinRT).
 
 ```powershell
 cargo test
@@ -39,8 +48,8 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-The final single-file executable is written to `target\release\puwbar.exe`. `build.rs` automatically compiles `tap/puwbar_tap.cpp` and links `assets/puwbar.ico`.
+The standalone binary is written to `target\release\puwbar.exe`. `build.rs` compiles `tap/puwbar_tap.cpp` and embeds `assets/puwbar.ico` automatically.
 
-## Release notes
+## License
 
-See [Releases](https://github.com/erikpuw/puwbar/releases) for changelogs.
+MIT — see [LICENSE](LICENSE).

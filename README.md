@@ -1,37 +1,46 @@
-# PuwBar
+<p align="center">
+  <img src="assets/puwbar.png" width="112" alt="Biểu tượng PuwBar">
+</p>
 
-[English](README.en.md)
+<h1 align="center">PuwBar</h1>
 
-PuwBar là công cụ gọn nhẹ cho Windows 11, biến thanh taskbar gốc thành các cụm kính mờ nổi bo góc riêng biệt (dock ứng dụng, cụm System Tray và nút Widgets khi bật). Toàn bộ chức năng gốc của taskbar Windows 11 được giữ nguyên, bao gồm animation của ứng dụng tray (như RunCat 365), menu chuột phải gốc, lưới icon overflow, Start menu và xem trước cửa sổ.
+<p align="center"><b>Taskbar kính mờ nổi cho Windows 11, giữ nguyên mọi tính năng gốc.</b></p>
 
-## Cách hoạt động
+<p align="center">
+  Tách thanh taskbar gốc thành các cụm kính nổi bo góc cho ứng dụng, System Tray và Widgets.<br>
+  Viết bằng Rust + C++/WinRT, một file exe ~870 KB duy nhất, không cần Windhawk, không cần cài Visual C++ Redistributable.
+</p>
 
-PuwBar gồm phần điều khiển viết bằng Rust và một thư viện TAP nhỏ (`puwbar_tap.dll`, C++/WinRT) được nhúng sẵn ngay trong `puwbar.exe`. Khi chạy, chương trình tự giải nén DLL vào `%TEMP%` và dùng API `InitializeXamlDiagnosticsEx` của `Windows.UI.Xaml.dll` để gắn trực tiếp vào cây XAML của `explorer.exe`.
+<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puwbar/releases">Bản mới nhất: v1.0.1</a></p>
 
-Vì chỉ chỉnh thuộc tính trên cây XAML hiện có của Windows 11, PuwBar tốn khoảng 1,2 MB RAM khi chạy nền, không cần tắt Explorer và không phụ thuộc Windhawk hay phần mềm ngoài. Khi thoát, mọi thuộc tính đã đổi được trả lại nguyên bản mà không cần khởi động lại Explorer.
+> **Chỉ tải từ nguồn của tác giả.** PuwBar do tác giả (erikpuw) phát hành duy nhất tại [github.com/erikpuw/puwbar](https://github.com/erikpuw/puwbar). Bản tải từ nơi khác (trang chia sẻ, kho khác, bản đóng gói lại, tệp gửi qua mạng) không do tác giả kiểm soát và không được đảm bảo: có thể đã bị sửa đổi hoặc chèn thêm mã. Hãy chỉ dùng bản ở mục [Releases](https://github.com/erikpuw/puwbar/releases) của kho này.
 
-## Tính năng chính (v1.0.1)
+## Tính năng
 
-- Một file thực thi duy nhất `puwbar.exe`, không cần chép kèm DLL hay runtime ngoài.
-- Kính mờ thời gian thực bằng `Windows.UI.Composition` (`CreateBackdropBrush` + `D2D1GaussianBlur` tối ưu tốc độ), viền sáng mảnh 15% và bo góc 12px.
-- Tự nhận diện cả 4 vị trí thanh taskbar (Bottom, Top, Left, Right) cùng căn lề Left/Center trong Windows Settings theo thời gian thực.
-- Khóa đúng cạnh vạch đánh dấu ứng dụng đang chạy khi đặt taskbar dọc bên phải.
-- Bọc kính đồng bộ cho cụm System Tray, popup overflow (`^`, `...`) và nút Widgets (chỉ hiện khi Widgets được bật trong Windows).
-- Hiệu ứng trượt ngang 300ms khớp nhịp mở/đóng ứng dụng, khóa VSync theo tần số quét màn hình.
-- Menu chuột phải ở icon System Tray hỗ trợ chuyển ngôn ngữ Tiếng Việt / English, hộp thoại Giới thiệu (About), áp dụng lại giao diện và bật/tắt tự khởi động cùng Windows qua Task Scheduler (chạy sớm ngay lúc đăng nhập, không trễ).
+| Tính năng | Làm gì |
+|---|---|
+| **Kính mờ thật** | Làm mờ nền phía sau theo thời gian thực qua `Windows.UI.Composition` (`CreateBackdropBrush` + `D2D1GaussianBlur`), viền trắng mảnh 15%, bo góc 12px. |
+| **Giữ nguyên bản gốc** | Không ẩn hay thay thế Explorer. Giữ đủ animation tray (RunCat 365, UniKey), menu chuột phải gốc, lưới icon overflow, Start menu và xem trước cửa sổ. |
+| **Đủ 4 cạnh & Left/Center** | Tự xoay bố cục theo thời gian thực khi đổi vị trí taskbar (**Bottom / Top / Left / Right**) hoặc căn lề (**Left / Center**) trong Windows Settings. |
+| **Sửa vạch cạnh phải** | Khóa đúng vạch đánh dấu ứng dụng đang chạy về cạnh phải khi đặt taskbar dọc bên phải màn hình. |
+| **Bọc kính đồng bộ** | Áp cùng lớp kính cho cụm System Tray, popup overflow (`^`, `...`) và nút Widgets (tự hiện khi bật Widgets trong Windows). |
+| **Trượt ngang mượt** | Nhịp trượt 300ms khớp với animation mở/đóng ứng dụng của Windows 11, khóa VSync theo tần số quét màn hình. |
+| **Nhẹ & 1 file duy nhất** | Chạy nền khoảng 1,2 MB RAM và 0% CPU. Thư viện TAP và icon được nhúng sẵn trong `puwbar.exe`, thoát ra là trả taskbar về nguyên bản. |
+| **Menu tray** | Khởi động cùng Windows, Áp dụng lại giao diện, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát (`Ctrl+Alt+F12`). |
 
-## Cài đặt và sử dụng
+**Khởi động cùng Windows** hỏi quyền quản trị một lần khi bật để tạo tác vụ Task Scheduler chạy ngay lúc đăng nhập (không trễ, tự chờ Explorer XAML sẵn sàng trong 30 giây). Nếu từ chối UAC, chương trình tự chuyển sang khóa `HKCU\...\Run`. Bỏ tick thì tắt.
 
-1. Tải `puwbar.exe` từ mục [Releases](https://github.com/erikpuw/puwbar/releases) hoặc tự build từ mã nguồn.
-2. Chép `puwbar.exe` vào thư mục cố định và chạy trực tiếp (không cần quyền quản trị).
-3. Bấm vào icon PuwBar ở System Tray để bật **Khởi động cùng Windows** (sẽ hỏi UAC một lần để tạo tác vụ Task Scheduler chạy sớm; nếu từ chối sẽ tự chuyển sang khóa `HKCU\...\Run`), đổi ngôn ngữ hoặc xem thông tin phiên bản.
-4. Nhấn `Ctrl+Alt+F12` hoặc chọn **Thoát PuwBar** trong menu tray để thoát và trả lại taskbar gốc.
+## Cài đặt và dùng
 
-> Nếu máy đang bật mod chỉnh giao diện taskbar trong Windhawk (như `Windows 11 Taskbar Styler`), nên tắt mod đó để tránh hai bên cùng ghi đè thuộc tính XAML.
+1. Tải `puwbar.exe` từ mục [Releases](https://github.com/erikpuw/puwbar/releases), đặt vào một thư mục cố định rồi chạy trực tiếp.
+2. Bấm vào icon PuwBar trong System Tray để bật **Khởi động cùng Windows** hoặc đổi ngôn ngữ.
+3. Nhấn `Ctrl+Alt+F12` hoặc chọn **Thoát PuwBar** ở tray để thoát và trả lại taskbar gốc mà không cần khởi động lại Explorer.
+
+Nếu máy đang bật mod chỉnh giao diện taskbar trong Windhawk (như `Windows 11 Taskbar Styler`), nên tắt mod đó để tránh hai bên cùng ghi đè thuộc tính XAML.
 
 ## Build từ mã nguồn
 
-Yêu cầu: Windows 11 (x64), Rust stable, MSVC Build Tools và Windows 10/11 SDK (`10.0.26100.0` hoặc mới hơn có `xamlom.h` và C++/WinRT).
+Cần Windows 11 (x64), Rust stable, MSVC Build Tools và Windows SDK (`10.0.26100.0` trở lên có `xamlom.h` và C++/WinRT).
 
 ```powershell
 cargo test
@@ -39,8 +48,8 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
 
-File đầu ra nằm tại `target\release\puwbar.exe`. `build.rs` tự biên dịch `tap/puwbar_tap.cpp` và nhúng kèm `assets/puwbar.ico` vào file `.exe`.
+File thực thi nằm tại `target\release\puwbar.exe`. `build.rs` tự biên dịch `tap/puwbar_tap.cpp` và nhúng kèm `assets/puwbar.ico`.
 
-## Ghi chú phát hành
+## Giấy phép
 
-Xem chi tiết các thay đổi tại mục [Releases](https://github.com/erikpuw/puwbar/releases).
+Phát hành theo giấy phép MIT, xem [LICENSE](LICENSE).
