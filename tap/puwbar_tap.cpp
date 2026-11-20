@@ -324,37 +324,6 @@ static void EnableSmoothShellSlide(xaml::UIElement const& el) {
     }
 }
 
-// Crisp slide-up + fade-in entrance animation on GPU compositor (used once at startup/attach).
-static void PlayEntranceSlideUp(xaml::UIElement const& el, float fromY, int delayMs, int durationMs) {
-    try {
-        xaml::Hosting::ElementCompositionPreview::SetIsTranslationEnabled(el, true);
-        auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
-        if (!visual) return;
-        auto compositor = visual.Compositor();
-        if (!compositor) return;
-
-        auto ease = compositor.CreateCubicBezierEasingFunction(
-            num::float2{0.16f, 1.0f}, num::float2{0.30f, 1.0f});
-
-        auto slide = compositor.CreateScalarKeyFrameAnimation();
-        slide.InsertKeyFrame(0.0f, fromY);
-        slide.InsertKeyFrame(1.0f, 0.0f, ease);
-        slide.Duration(std::chrono::milliseconds(durationMs));
-        slide.DelayTime(std::chrono::milliseconds(delayMs));
-        slide.DelayBehavior(comp::AnimationDelayBehavior::SetInitialValueBeforeDelay);
-        visual.StartAnimation(L"Translation.Y", slide);
-
-        auto fade = compositor.CreateScalarKeyFrameAnimation();
-        fade.InsertKeyFrame(0.0f, 0.0f);
-        fade.InsertKeyFrame(1.0f, 1.0f, ease);
-        fade.Duration(std::chrono::milliseconds(durationMs));
-        fade.DelayTime(std::chrono::milliseconds(delayMs));
-        fade.DelayBehavior(comp::AnimationDelayBehavior::SetInitialValueBeforeDelay);
-        visual.StartAnimation(L"Opacity", fade);
-    } catch (...) {
-    }
-}
-
 class PuwBarTap : public IObjectWithSite, public IVisualTreeServiceCallback2 {
 public:
     PuwBarTap() {
@@ -403,7 +372,6 @@ public:
                 return S_OK;
             }
             DetachLocked();
-            m_attachTick = GetTickCount64();
             m_site = pUnkSite;
             m_site->AddRef();
 
@@ -687,6 +655,9 @@ private:
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 m_implicitTargets.push_back(winrt::make_weak(el));
             }
+            if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
+                try { fe.UpdateLayout(); } catch (...) {}
+            }
             return;
         }
 
@@ -698,10 +669,8 @@ private:
             SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             ApplyLayoutProps(obj, type, name, parentType, true);
-            if (auto el = obj.try_as<xaml::UIElement>()) {
-                if (IsInitialEntranceWindow()) {
-                    PlayEntranceSlideUp(el, 16.0f, 0, 240);
-                }
+            if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
+                try { fe.UpdateLayout(); } catch (...) {}
             }
             return;
         }
@@ -729,11 +698,11 @@ private:
             ApplyLayoutProps(obj, type, name, parentType, true);
             if (auto el = obj.try_as<xaml::UIElement>()) {
                 EnableSmoothShellSlide(el);
-                if (IsInitialEntranceWindow()) {
-                    PlayEntranceSlideUp(el, 16.0f, 60, 240);
-                }
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 m_implicitTargets.push_back(winrt::make_weak(el));
+            }
+            if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
+                try { fe.UpdateLayout(); } catch (...) {}
             }
             return;
         }
@@ -774,18 +743,14 @@ private:
             ApplyLayoutProps(obj, type, name, parentType, true);
             if (auto el = obj.try_as<xaml::UIElement>()) {
                 EnableSmoothShellSlide(el);
-                if (IsInitialEntranceWindow()) {
-                    PlayEntranceSlideUp(el, 16.0f, 30, 240);
-                }
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 m_implicitTargets.push_back(winrt::make_weak(el));
             }
+            if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
+                try { fe.UpdateLayout(); } catch (...) {}
+            }
             return;
         }
-    }
-
-    bool IsInitialEntranceWindow() const {
-        return (GetTickCount64() - m_attachTick) < 1500;
     }
 
     void RestoreAllOnUiThread() {
@@ -822,7 +787,6 @@ private:
 
     void ReloadStyleOnUiThread() {
         RestoreAllOnUiThread();
-        m_attachTick = GetTickCount64();
         std::vector<TrackedElement> alive;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -1057,7 +1021,6 @@ private:
     std::vector<TrackedElement> m_tracked;
     std::vector<SavedProp> m_saved;
     std::vector<winrt::weak_ref<xaml::UIElement>> m_implicitTargets;
-    ULONGLONG m_attachTick = GetTickCount64();
     std::atomic<bool> m_stopWatcher{false};
     std::thread m_watcher;
 };
