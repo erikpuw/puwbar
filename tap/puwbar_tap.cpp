@@ -568,19 +568,18 @@ private:
 
         if (type == L"Taskbar.TaskbarFrame") {
             if (vertical) {
-                setProp(xaml::FrameworkElement::WidthProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
+                // Vertical taskbar: keep Windows' native Width (~48px), only auto-size Height.
                 setProp(xaml::FrameworkElement::HeightProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
                 setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Stretch));
                 setProp(
                     xaml::FrameworkElement::VerticalAlignmentProperty(),
                     winrt::box_value(startAligned ? xaml::VerticalAlignment::Top : xaml::VerticalAlignment::Center));
-                // SystemTrayFrameGrid already has its own vertical slot; keep vertical margin tight (4px) so all icons fit without premature '...' overflow.
                 setProp(
                     xaml::FrameworkElement::MarginProperty(),
                     winrt::box_value(xaml::Thickness{0.0, 4.0, 0.0, 4.0}));
             } else {
+                // Horizontal taskbar: keep Windows' native Height (~48px), only auto-size Width.
                 setProp(xaml::FrameworkElement::WidthProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
-                setProp(xaml::FrameworkElement::HeightProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
                 setProp(
                     xaml::FrameworkElement::HorizontalAlignmentProperty(),
                     winrt::box_value(startAligned ? xaml::HorizontalAlignment::Left : xaml::HorizontalAlignment::Center));
