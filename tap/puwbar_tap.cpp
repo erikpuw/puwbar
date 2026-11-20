@@ -13,6 +13,8 @@
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Foundation.Numerics.h>
 #include <winrt/Windows.Graphics.Effects.h>
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.UI.Composition.h>
@@ -23,6 +25,7 @@
 #include <winrt/Windows.UI.Xaml.Media.h>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 #include <string>
@@ -36,6 +39,7 @@ namespace media = winrt::Windows::UI::Xaml::Media;
 namespace comp = winrt::Windows::UI::Composition;
 namespace ge = winrt::Windows::Graphics::Effects;
 namespace ge_interop = ABI::Windows::Graphics::Effects;
+namespace num = winrt::Windows::Foundation::Numerics;
 
 // {7F4B2C91-3E8A-4D15-9C62-8A1F5E3B9D42}
 static constexpr GUID CLSID_PuwBarTap = {
@@ -257,6 +261,100 @@ static media::SolidColorBrush MakePuwBorder() {
     return media::SolidColorBrush(winrt::Windows::UI::Color{38, 255, 255, 255});
 }
 
+// Reads Windows 11 Taskbar alignment setting: 0 = Left/Top, 1 (default) = Center.
+static bool IsTaskbarAlignedStart() {
+    DWORD val = 1;
+    DWORD size = sizeof(val);
+    if (RegGetValueW(
+            HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+            L"TaskbarAl",
+            RRF_RT_REG_DWORD,
+            nullptr,
+            &val,
+            &size) == ERROR_SUCCESS) {
+        return val == 0;
+    }
+    return false;
+}
+
+enum class TaskbarEdge { Bottom, Top, Left, Right };
+
+static TaskbarEdge GetTaskbarEdge() {
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!tray) return TaskbarEdge::Bottom;
+    RECT rc{};
+    if (!GetWindowRect(tray, &rc)) return TaskbarEdge::Bottom;
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+    HMONITOR mon = MonitorFromWindow(tray, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (mon && GetMonitorInfoW(mon, &mi)) {
+        if (h > w) {
+            int midX = (mi.rcMonitor.left + mi.rcMonitor.right) / 2;
+            return ((rc.left + rc.right) / 2 < midX) ? TaskbarEdge::Left : TaskbarEdge::Right;
+        }
+        int midY = (mi.rcMonitor.top + mi.rcMonitor.bottom) / 2;
+        return ((rc.top + rc.bottom) / 2 < midY) ? TaskbarEdge::Top : TaskbarEdge::Bottom;
+    }
+    return (h > w) ? TaskbarEdge::Left : TaskbarEdge::Bottom;
+}
+
+// Smooth GPU implicit animation for horizontal position (Offset only — no Size lag so no empty ghost slot appears).
+static void EnableSmoothShellSlide(xaml::UIElement const& el) {
+    try {
+        auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
+        if (!visual) return;
+        auto compositor = visual.Compositor();
+        if (!compositor) return;
+
+        auto ease = compositor.CreateCubicBezierEasingFunction(
+            num::float2{0.22f, 1.0f}, num::float2{0.36f, 1.0f});
+
+        auto offsetAnim = compositor.CreateVector3KeyFrameAnimation();
+        offsetAnim.Target(L"Offset");
+        offsetAnim.InsertExpressionKeyFrame(1.0f, L"this.FinalValue", ease);
+        offsetAnim.Duration(std::chrono::milliseconds(160));
+
+        auto implicit = compositor.CreateImplicitAnimationCollection();
+        implicit.Insert(L"Offset", offsetAnim);
+        visual.ImplicitAnimations(implicit);
+    } catch (...) {
+    }
+}
+
+// Crisp slide-up + fade-in entrance animation on GPU compositor (used once at startup/attach).
+static void PlayEntranceSlideUp(xaml::UIElement const& el, float fromY, int delayMs, int durationMs) {
+    try {
+        xaml::Hosting::ElementCompositionPreview::SetIsTranslationEnabled(el, true);
+        auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
+        if (!visual) return;
+        auto compositor = visual.Compositor();
+        if (!compositor) return;
+
+        auto ease = compositor.CreateCubicBezierEasingFunction(
+            num::float2{0.16f, 1.0f}, num::float2{0.30f, 1.0f});
+
+        auto slide = compositor.CreateScalarKeyFrameAnimation();
+        slide.InsertKeyFrame(0.0f, fromY);
+        slide.InsertKeyFrame(1.0f, 0.0f, ease);
+        slide.Duration(std::chrono::milliseconds(durationMs));
+        slide.DelayTime(std::chrono::milliseconds(delayMs));
+        slide.DelayBehavior(comp::AnimationDelayBehavior::SetInitialValueBeforeDelay);
+        visual.StartAnimation(L"Translation.Y", slide);
+
+        auto fade = compositor.CreateScalarKeyFrameAnimation();
+        fade.InsertKeyFrame(0.0f, 0.0f);
+        fade.InsertKeyFrame(1.0f, 1.0f, ease);
+        fade.Duration(std::chrono::milliseconds(durationMs));
+        fade.DelayTime(std::chrono::milliseconds(delayMs));
+        fade.DelayBehavior(comp::AnimationDelayBehavior::SetInitialValueBeforeDelay);
+        visual.StartAnimation(L"Opacity", fade);
+    } catch (...) {
+    }
+}
+
 class PuwBarTap : public IObjectWithSite, public IVisualTreeServiceCallback2 {
 public:
     PuwBarTap() {
@@ -305,6 +403,7 @@ public:
                 return S_OK;
             }
             DetachLocked();
+            m_attachTick = GetTickCount64();
             m_site = pUnkSite;
             m_site->AddRef();
 
@@ -446,7 +545,9 @@ private:
             || name == L"BackgroundFill"
             || name == L"BackgroundStroke"
             || name == L"SystemTrayFrameGrid"
-            || name == L"OverflowFlyoutBackgroundBorder";
+            || name == L"OverflowFlyoutBackgroundBorder"
+            || (name == L"ExperienceToggleButtonRootPanel"
+                && parentType == L"Taskbar.AugmentedEntryPointButton");
     }
 
     void SaveAndSet(
@@ -471,16 +572,108 @@ private:
         }
     }
 
+    void ApplyLayoutProps(
+        xaml::DependencyObject const& obj,
+        std::wstring const& type,
+        std::wstring const& name,
+        std::wstring const& parentType,
+        bool save) {
+        TaskbarEdge edge = GetTaskbarEdge();
+        bool vertical = (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right);
+        bool startAligned = IsTaskbarAlignedStart();
+
+        auto setProp = [&](xaml::DependencyProperty const& prop, winrt::Windows::Foundation::IInspectable const& val) {
+            if (save) {
+                SaveAndSet(obj, prop, val);
+            } else {
+                try { obj.SetValue(prop, val); } catch (...) {}
+            }
+        };
+
+        if (type == L"Taskbar.TaskbarFrame") {
+            if (vertical) {
+                setProp(xaml::FrameworkElement::WidthProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
+                setProp(xaml::FrameworkElement::HeightProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
+                setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Stretch));
+                setProp(
+                    xaml::FrameworkElement::VerticalAlignmentProperty(),
+                    winrt::box_value(startAligned ? xaml::VerticalAlignment::Top : xaml::VerticalAlignment::Center));
+                setProp(
+                    xaml::FrameworkElement::MarginProperty(),
+                    winrt::box_value(startAligned ? xaml::Thickness{0.0, 8.0, 0.0, 260.0} : xaml::Thickness{0.0, 120.0, 0.0, 260.0}));
+            } else {
+                setProp(xaml::FrameworkElement::WidthProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
+                setProp(xaml::FrameworkElement::HeightProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
+                setProp(
+                    xaml::FrameworkElement::HorizontalAlignmentProperty(),
+                    winrt::box_value(startAligned ? xaml::HorizontalAlignment::Left : xaml::HorizontalAlignment::Center));
+                setProp(xaml::FrameworkElement::VerticalAlignmentProperty(), winrt::box_value(xaml::VerticalAlignment::Stretch));
+                setProp(
+                    xaml::FrameworkElement::MarginProperty(),
+                    winrt::box_value(startAligned ? xaml::Thickness{8.0, 0.0, 250.0, 0.0} : xaml::Thickness{250.0, 0.0, 250.0, 0.0}));
+            }
+            return;
+        }
+
+        if (name == L"RootGrid" && parentType == L"Taskbar.TaskbarFrame") {
+            if (vertical) {
+                setProp(controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{0.0, 3.0, 0.0, 3.0}));
+                setProp(
+                    xaml::FrameworkElement::MarginProperty(),
+                    winrt::box_value(edge == TaskbarEdge::Right ? xaml::Thickness{2.0, 0.0, 4.0, 0.0} : xaml::Thickness{4.0, 0.0, 2.0, 0.0}));
+            } else {
+                setProp(controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{3.0, 0.0, 3.0, 0.0}));
+                setProp(
+                    xaml::FrameworkElement::MarginProperty(),
+                    winrt::box_value(edge == TaskbarEdge::Top ? xaml::Thickness{0.0, 4.0, 0.0, 2.0} : xaml::Thickness{0.0, 2.0, 0.0, 4.0}));
+            }
+            return;
+        }
+
+        if (name == L"SystemTrayFrameGrid") {
+            xaml::Thickness margin = vertical
+                ? (edge == TaskbarEdge::Right ? xaml::Thickness{2.0, 0.0, 4.0, 8.0} : xaml::Thickness{4.0, 0.0, 2.0, 8.0})
+                : (edge == TaskbarEdge::Top ? xaml::Thickness{0.0, 4.0, 8.0, 2.0} : xaml::Thickness{0.0, 2.0, 8.0, 4.0});
+            xaml::Thickness pad = vertical
+                ? xaml::Thickness{0.0, 6.0, 0.0, 6.0}
+                : xaml::Thickness{6.0, 0.0, 6.0, 0.0};
+            setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(margin));
+            if (obj.try_as<controls::StackPanel>()) {
+                setProp(controls::StackPanel::PaddingProperty(), winrt::box_value(pad));
+            } else if (obj.try_as<controls::Grid>()) {
+                setProp(controls::Grid::PaddingProperty(), winrt::box_value(pad));
+            }
+            return;
+        }
+
+        if (name == L"ExperienceToggleButtonRootPanel"
+            && parentType == L"Taskbar.AugmentedEntryPointButton") {
+            xaml::Thickness margin = vertical
+                ? (edge == TaskbarEdge::Right ? xaml::Thickness{2.0, 8.0, 4.0, 0.0} : xaml::Thickness{4.0, 8.0, 2.0, 0.0})
+                : (edge == TaskbarEdge::Top ? xaml::Thickness{8.0, 4.0, 0.0, 2.0} : xaml::Thickness{8.0, 2.0, 0.0, 4.0});
+            xaml::Thickness pad = vertical
+                ? xaml::Thickness{0.0, 4.0, 0.0, 4.0}
+                : xaml::Thickness{6.0, 0.0, 6.0, 0.0};
+            setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(margin));
+            if (obj.try_as<controls::Grid>()) {
+                setProp(controls::Grid::PaddingProperty(), winrt::box_value(pad));
+            }
+        }
+    }
+
     void ApplyStyleIfMatch(
         xaml::DependencyObject const& obj,
         std::wstring const& type,
         std::wstring const& name,
         std::wstring const& parentType) {
-        // 1. Center floating dock frame
+        // 1. Floating dock frame: follows Bottom/Top/Left/Right edge + Left/Center alignment
         if (type == L"Taskbar.TaskbarFrame") {
-            SaveAndSet(obj, xaml::FrameworkElement::WidthProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
-            SaveAndSet(obj, xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Center));
-            SaveAndSet(obj, xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{250.0, 0.0, 250.0, 0.0}));
+            ApplyLayoutProps(obj, type, name, parentType, true);
+            if (auto el = obj.try_as<xaml::UIElement>()) {
+                EnableSmoothShellSlide(el);
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_implicitTargets.push_back(winrt::make_weak(el));
+            }
             return;
         }
 
@@ -491,8 +684,12 @@ private:
             SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
-            SaveAndSet(obj, controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{3.0, 0.0, 3.0, 0.0}));
-            SaveAndSet(obj, xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{0.0, 2.0, 0.0, 4.0}));
+            ApplyLayoutProps(obj, type, name, parentType, true);
+            if (auto el = obj.try_as<xaml::UIElement>()) {
+                if (IsInitialEntranceWindow()) {
+                    PlayEntranceSlideUp(el, 16.0f, 0, 240);
+                }
+            }
             return;
         }
 
@@ -505,19 +702,25 @@ private:
         // 4. Separate floating glass pill for the real Windows 11 System Tray
         if (name == L"SystemTrayFrameGrid") {
             SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
-            SaveAndSet(obj, xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{0.0, 2.0, 8.0, 4.0}));
             if (obj.try_as<controls::StackPanel>()) {
                 SaveAndSet(obj, controls::StackPanel::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::StackPanel::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
                 SaveAndSet(obj, controls::StackPanel::BorderBrushProperty(), MakePuwBorder());
                 SaveAndSet(obj, controls::StackPanel::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
-                SaveAndSet(obj, controls::StackPanel::PaddingProperty(), winrt::box_value(xaml::Thickness{6.0, 0.0, 6.0, 0.0}));
             } else if (obj.try_as<controls::Grid>()) {
                 SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
                 SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
                 SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
-                SaveAndSet(obj, controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{6.0, 0.0, 6.0, 0.0}));
+            }
+            ApplyLayoutProps(obj, type, name, parentType, true);
+            if (auto el = obj.try_as<xaml::UIElement>()) {
+                EnableSmoothShellSlide(el);
+                if (IsInitialEntranceWindow()) {
+                    PlayEntranceSlideUp(el, 16.0f, 60, 240);
+                }
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_implicitTargets.push_back(winrt::make_weak(el));
             }
             return;
         }
@@ -531,13 +734,51 @@ private:
             SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             return;
         }
+
+        // 6. Matching floating glass pill for the Widgets button (visible only when Widgets is enabled in Windows)
+        if (name == L"ExperienceToggleButtonRootPanel"
+            && parentType == L"Taskbar.AugmentedEntryPointButton") {
+            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
+            if (obj.try_as<controls::Grid>()) {
+                SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
+                SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
+                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            }
+            ApplyLayoutProps(obj, type, name, parentType, true);
+            if (auto el = obj.try_as<xaml::UIElement>()) {
+                EnableSmoothShellSlide(el);
+                if (IsInitialEntranceWindow()) {
+                    PlayEntranceSlideUp(el, 16.0f, 30, 240);
+                }
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_implicitTargets.push_back(winrt::make_weak(el));
+            }
+            return;
+        }
+    }
+
+    bool IsInitialEntranceWindow() const {
+        return (GetTickCount64() - m_attachTick) < 1500;
     }
 
     void RestoreAllOnUiThread() {
+        std::vector<winrt::weak_ref<xaml::UIElement>> implicits;
         std::vector<SavedProp> items;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            implicits.swap(m_implicitTargets);
             items.swap(m_saved);
+        }
+        for (auto& imp : implicits) {
+            try {
+                if (auto el = imp.get()) {
+                    if (auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el)) {
+                        visual.ImplicitAnimations(nullptr);
+                    }
+                }
+            } catch (...) {
+            }
         }
         for (auto it = items.rbegin(); it != items.rend(); ++it) {
             try {
@@ -555,6 +796,7 @@ private:
 
     void ReloadStyleOnUiThread() {
         RestoreAllOnUiThread();
+        m_attachTick = GetTickCount64();
         std::vector<TrackedElement> alive;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -620,6 +862,51 @@ private:
         }
     }
 
+    void SyncAlignmentOnUiThread() {
+        std::vector<TrackedElement> targets;
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            for (auto& t : m_tracked) {
+                if (t.type == L"Taskbar.TaskbarFrame"
+                    || (t.name == L"RootGrid" && t.parentType == L"Taskbar.TaskbarFrame")
+                    || t.name == L"SystemTrayFrameGrid"
+                    || (t.name == L"ExperienceToggleButtonRootPanel"
+                        && t.parentType == L"Taskbar.AugmentedEntryPointButton")) {
+                    targets.push_back(t);
+                }
+            }
+        }
+        for (auto& t : targets) {
+            try {
+                if (auto obj = t.target.get()) {
+                    ApplyLayoutProps(obj, t.type, t.name, t.parentType, false);
+                }
+            } catch (...) {
+            }
+        }
+    }
+
+    void DispatchSyncAlignment() {
+        winrt::Windows::UI::Core::CoreDispatcher dispatcher{nullptr};
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            dispatcher = m_dispatcher;
+        }
+        if (dispatcher) {
+            try {
+                AddRef();
+                dispatcher.RunAsync(
+                    winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
+                    [this]() {
+                        SyncAlignmentOnUiThread();
+                        Release();
+                    });
+            } catch (...) {
+                Release();
+            }
+        }
+    }
+
     void StartWatcher() {
         StopWatcher();
         m_stopWatcher.store(false);
@@ -627,23 +914,77 @@ private:
         m_watcher = std::thread([this]() {
             HANDLE stopEv = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\PuwBar.StopEvent");
             HANDLE reloadEv = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\PuwBar.ReloadEvent");
-            HANDLE handles[2]{};
-            DWORD count = 0;
-            if (stopEv) handles[count++] = stopEv;
-            if (reloadEv) handles[count++] = reloadEv;
+            HANDLE alignEv = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            HKEY advKey = nullptr;
+            bool watchingReg = false;
+            if (alignEv && RegOpenKeyExW(
+                    HKEY_CURRENT_USER,
+                    L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                    0,
+                    KEY_NOTIFY,
+                    &advKey) == ERROR_SUCCESS) {
+                watchingReg = (RegNotifyChangeKeyValue(advKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, alignEv, TRUE) == ERROR_SUCCESS);
+            }
 
+            HANDLE handles[4]{};
+            int stopIdx = -1, reloadIdx = -1, alignIdx = -1, posIdx = -1;
+            DWORD count = 0;
+            if (stopEv) { stopIdx = static_cast<int>(count); handles[count++] = stopEv; }
+            if (reloadEv) { reloadIdx = static_cast<int>(count); handles[count++] = reloadEv; }
+            if (watchingReg) { alignIdx = static_cast<int>(count); handles[count++] = alignEv; }
+
+            HANDLE posEv = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            HKEY stuckKey = nullptr;
+            if (posEv && RegOpenKeyExW(
+                    HKEY_CURRENT_USER,
+                    L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StuckRects3",
+                    0,
+                    KEY_NOTIFY,
+                    &stuckKey) == ERROR_SUCCESS) {
+                if (RegNotifyChangeKeyValue(stuckKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, posEv, TRUE) == ERROR_SUCCESS) {
+                    posIdx = static_cast<int>(count);
+                    handles[count++] = posEv;
+                }
+            }
+
+            TaskbarEdge lastEdge = GetTaskbarEdge();
             if (count > 0) {
                 while (!m_stopWatcher.load()) {
-                    DWORD wait = WaitForMultipleObjects(count, handles, FALSE, 250);
-                    if (stopEv && wait == WAIT_OBJECT_0) {
+                    DWORD wait = WaitForMultipleObjects(count, handles, FALSE, 300);
+                    if (stopIdx >= 0 && wait == WAIT_OBJECT_0 + static_cast<DWORD>(stopIdx)) {
                         RequestRestoreAndUnadvise();
                         break;
                     }
-                    if (reloadEv && ((stopEv && wait == WAIT_OBJECT_0 + 1) || (!stopEv && wait == WAIT_OBJECT_0))) {
+                    if (reloadIdx >= 0 && wait == WAIT_OBJECT_0 + static_cast<DWORD>(reloadIdx)) {
                         DispatchReload();
+                    }
+                    if (alignIdx >= 0 && wait == WAIT_OBJECT_0 + static_cast<DWORD>(alignIdx)) {
+                        DispatchSyncAlignment();
+                        if (advKey && alignEv) {
+                            RegNotifyChangeKeyValue(advKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, alignEv, TRUE);
+                        }
+                    }
+                    if (posIdx >= 0 && wait == WAIT_OBJECT_0 + static_cast<DWORD>(posIdx)) {
+                        Sleep(120);
+                        lastEdge = GetTaskbarEdge();
+                        DispatchSyncAlignment();
+                        if (stuckKey && posEv) {
+                            RegNotifyChangeKeyValue(stuckKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, posEv, TRUE);
+                        }
+                    }
+                    if (wait == WAIT_TIMEOUT) {
+                        TaskbarEdge cur = GetTaskbarEdge();
+                        if (cur != lastEdge) {
+                            lastEdge = cur;
+                            DispatchSyncAlignment();
+                        }
                     }
                 }
             }
+            if (stuckKey) RegCloseKey(stuckKey);
+            if (posEv) CloseHandle(posEv);
+            if (advKey) RegCloseKey(advKey);
+            if (alignEv) CloseHandle(alignEv);
             if (stopEv) CloseHandle(stopEv);
             if (reloadEv) CloseHandle(reloadEv);
             Release();
@@ -688,6 +1029,8 @@ private:
     std::unordered_map<InstanceHandle, ElementMeta> m_meta;
     std::vector<TrackedElement> m_tracked;
     std::vector<SavedProp> m_saved;
+    std::vector<winrt::weak_ref<xaml::UIElement>> m_implicitTargets;
+    ULONGLONG m_attachTick = GetTickCount64();
     std::atomic<bool> m_stopWatcher{false};
     std::thread m_watcher;
 };
