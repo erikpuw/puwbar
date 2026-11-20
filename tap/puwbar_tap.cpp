@@ -315,13 +315,14 @@ static void EnableSmoothShellSlide(xaml::UIElement const& el) {
         auto compositor = visual.Compositor();
         if (!compositor) return;
 
+        // Balanced ease-in-out curve (~300ms) timed to match Windows 11's native app icon slide-up animation.
         auto ease = compositor.CreateCubicBezierEasingFunction(
-            num::float2{0.22f, 1.0f}, num::float2{0.36f, 1.0f});
+            num::float2{0.35f, 0.0f}, num::float2{0.20f, 1.0f});
 
         auto offsetAnim = compositor.CreateVector3KeyFrameAnimation();
         offsetAnim.Target(L"Offset");
         offsetAnim.InsertExpressionKeyFrame(1.0f, L"this.FinalValue", ease);
-        offsetAnim.Duration(std::chrono::milliseconds(160));
+        offsetAnim.Duration(std::chrono::milliseconds(300));
 
         auto implicit = compositor.CreateImplicitAnimationCollection();
         implicit.Insert(L"Offset", offsetAnim);
