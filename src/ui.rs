@@ -2,7 +2,7 @@ use crate::{
     desktop::{self, wide, Snapshot},
     shell::{self, Group},
 };
-use puwbar::model::{layout, Layout, BOTTOM_GAP_DIP};
+use puwbar::model::{layout, tray_popup_layout, Layout, BOTTOM_GAP_DIP};
 use std::{
     cell::RefCell,
     mem::size_of,
@@ -29,9 +29,11 @@ const BATTERY: usize = 22;
 const CLOCK: usize = 23;
 const NOTIFICATIONS: usize = 24;
 const TRAY_ICON: usize = 30;
+const TRAY_POPUP_ITEM: usize = 500;
 const EXIT_HOTKEY: i32 = 1;
 const FOCUS_HOTKEY: i32 = 2;
 static MAIN: AtomicIsize = AtomicIsize::new(0);
+static BUTTON_PROC: AtomicIsize = AtomicIsize::new(0);
 thread_local! { static STATE: RefCell<Option<State>> = const { RefCell::new(None) }; }
 
 struct Panel {
@@ -40,15 +42,26 @@ struct Panel {
     monitor: RECT,
     dpi: u32,
     layout: Layout,
-    signature: Vec<String>,
+    dock_structure: Vec<String>,
+    dock_visual: Vec<String>,
+    tray_structure: usize,
+    tray_visual: Vec<String>,
     tooltip: HWND,
     tray_tooltip: HWND,
+}
+
+struct TrayPopup {
+    hwnd: HWND,
+    tooltip: HWND,
+    items: Vec<crate::tray::Item>,
 }
 
 struct State {
     groups: Vec<Group>,
     tray_items: Vec<crate::tray::Item>,
     panels: Vec<Panel>,
+    tray_popup: Option<TrayPopup>,
+    tray_popup_closed_at: u64,
     snapshot: Snapshot,
     preview: bool,
     menu_open: bool,
@@ -120,6 +133,17 @@ unsafe fn run_session(preview: bool, seconds: Option<u32>) -> Result<(), String>
     if RegisterClassExW(&wc) == 0 {
         return Err("Không đăng ký được cửa sổ PuwBar".into());
     }
+    let popup_class = wide("PuwBar.TrayPopup");
+    let popup_wc = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        style: CS_DBLCLKS,
+        lpfnWndProc: Some(tray_popup_proc),
+        hInstance: instance,
+        hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+        lpszClassName: popup_class.as_ptr(),
+        ..std::mem::zeroed()
+    };
+    let _ = RegisterClassExW(&popup_wc);
     let mut panels = Vec::new();
     for monitor in desktop::monitors() {
         let r = monitor.rcMonitor;
@@ -169,7 +193,10 @@ unsafe fn run_session(preview: bool, seconds: Option<u32>) -> Result<(), String>
             monitor: r,
             dpi,
             layout: l,
-            signature: Vec::new(),
+            dock_structure: Vec::new(),
+            dock_visual: Vec::new(),
+            tray_structure: usize::MAX,
+            tray_visual: Vec::new(),
             tooltip: create_tooltip(dock),
             tray_tooltip: create_tooltip(tray),
         };
@@ -192,6 +219,8 @@ unsafe fn run_session(preview: bool, seconds: Option<u32>) -> Result<(), String>
             groups,
             tray_items,
             panels,
+            tray_popup: None,
+            tray_popup_closed_at: 0,
             snapshot: snapshot.clone(),
             preview,
             menu_open: false,
@@ -341,29 +370,41 @@ unsafe fn create_tooltip(owner: HWND) -> HWND {
     hwnd
 }
 
-unsafe fn button(
-    parent: HWND,
-    tooltip: HWND,
-    id: usize,
-    label: &str,
-    x: i32,
-    width: i32,
-    height: i32,
-) {
+unsafe extern "system" fn button_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    if msg == WM_ERASEBKGND {
+        return 1;
+    }
+    let orig = BUTTON_PROC.load(Ordering::Relaxed);
+    if orig != 0 {
+        let f: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
+            std::mem::transmute(orig);
+        CallWindowProcW(Some(f), hwnd, msg, w, l)
+    } else {
+        DefWindowProcW(hwnd, msg, w, l)
+    }
+}
+
+unsafe fn button_at(parent: HWND, tooltip: HWND, id: usize, label: &str, rect: RECT) {
     let hwnd = CreateWindowExW(
         0,
         wide("BUTTON").as_ptr(),
         wide(label).as_ptr(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW as u32,
-        x,
-        2,
-        width,
-        height - 4,
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
         parent,
         id as HMENU,
         GetModuleHandleW(null()),
         null(),
     );
+    if !hwnd.is_null() {
+        let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, button_proc as *const () as isize);
+        if prev != 0 && prev != button_proc as *const () as isize {
+            let _ = BUTTON_PROC.compare_exchange(0, prev, Ordering::SeqCst, Ordering::Relaxed);
+        }
+    }
     let ti = TTTOOLINFOW {
         cbSize: size_of::<TTTOOLINFOW>() as u32,
         uFlags: TTF_IDISHWND | TTF_SUBCLASS,
@@ -373,6 +414,29 @@ unsafe fn button(
         ..std::mem::zeroed()
     };
     SendMessageW(tooltip, TTM_ADDTOOLW, 0, &ti as *const _ as LPARAM);
+}
+
+unsafe fn button(
+    parent: HWND,
+    tooltip: HWND,
+    id: usize,
+    label: &str,
+    x: i32,
+    width: i32,
+    height: i32,
+) {
+    button_at(
+        parent,
+        tooltip,
+        id,
+        label,
+        RECT {
+            left: x,
+            top: 2,
+            right: x + width,
+            bottom: height - 2,
+        },
+    );
 }
 
 unsafe fn clear_buttons(parent: HWND, tooltip: HWND) {
@@ -456,6 +520,10 @@ fn cleanup() {
     let state = STATE.with(|s| s.borrow_mut().take());
     if let Some(state) = state {
         unsafe {
+            if let Some(popup) = state.tray_popup {
+                DestroyWindow(popup.tooltip);
+                DestroyWindow(popup.hwnd);
+            }
             for p in &state.panels {
                 destroy_panel(p, state.preview);
             }
@@ -467,6 +535,8 @@ fn cleanup() {
 }
 
 fn rebuild() {
+    let mut pending_texts: Vec<(HWND, String)> = Vec::new();
+    let mut pending_redraws: Vec<HWND> = Vec::new();
     STATE.with(|cell| {
         let mut state = cell.borrow_mut();
         let Some(state) = state.as_mut() else {
@@ -476,6 +546,7 @@ fn rebuild() {
             return;
         }
         shell::refresh(&mut state.groups);
+        let foreground = unsafe { GetForegroundWindow() } as usize;
         for p in &mut state.panels {
             let Some(l) = layout(
                 p.monitor.right - p.monitor.left,
@@ -486,24 +557,39 @@ fn rebuild() {
             ) else {
                 continue;
             };
-            let signature: Vec<String> = state
+            let dock_structure: Vec<String> = state
                 .groups
                 .iter()
                 .take(l.capacity)
-                .map(|g| format!("{}:{}", g.key, g.windows.len()))
+                .map(|g| g.key.clone())
                 .chain(Some(format!("overflow:{}", l.overflow)))
-                .chain(
-                    state
-                        .tray_items
-                        .iter()
-                        .take(l.tray_slots)
-                        .map(|item| format!("{}:{}", item.name, item.pid)),
-                )
+                .collect();
+            let dock_visual: Vec<String> = state
+                .groups
+                .iter()
+                .take(l.capacity)
+                .map(|g| {
+                    let active = g.windows.iter().any(|(h, _)| *h as usize == foreground);
+                    format!("{}:{}:{}", g.key, g.windows.len(), u8::from(active))
+                })
+                .chain(Some(format!("overflow:{}", l.overflow)))
+                .collect();
+            let tray_visual: Vec<String> = state
+                .tray_items
+                .iter()
+                .take(l.tray_slots)
+                .map(|item| format!("{}:{}", item.name, item.pid))
                 .collect();
             unsafe {
-                if signature != p.signature {
+                let layout_changed = l != p.layout;
+                let dock_rebuilt = dock_structure != p.dock_structure;
+                let tray_rebuilt =
+                    l.tray_slots != p.tray_structure || GetWindow(p.tray, GW_CHILD).is_null();
+                if layout_changed {
                     p.layout = l;
                     position(p);
+                }
+                if dock_rebuilt {
                     clear_buttons(p.dock, p.tooltip);
                     let padding = 10 * p.dpi as i32 / 96;
                     button(p.dock, p.tooltip, START, "Start", padding, l.slot, l.height);
@@ -529,10 +615,18 @@ fn rebuild() {
                             l.height,
                         );
                     }
-                    p.signature = signature;
-                    clear_buttons(p.tray, p.tray_tooltip);
+                    p.dock_structure = dock_structure;
+                } else if dock_visual != p.dock_visual {
+                    for (index, g) in state.groups.iter().take(l.capacity).enumerate() {
+                        let child = GetDlgItem(p.dock, (APP + index) as i32);
+                        if !child.is_null() {
+                            pending_texts
+                                .push((child, format!("{} — {} cửa sổ", g.name, g.windows.len())));
+                        }
+                    }
                 }
-                if GetWindow(p.tray, GW_CHILD).is_null() {
+                if tray_rebuilt {
+                    clear_buttons(p.tray, p.tray_tooltip);
                     let px = |n| n * p.dpi as i32 / 96;
                     let extra = l.tray_slots as i32 * px(28);
                     for (i, item) in state.tray_items.iter().take(l.tray_slots).enumerate() {
@@ -591,14 +685,40 @@ fn rebuild() {
                         px(78),
                         l.height,
                     );
+                    p.tray_structure = l.tray_slots;
+                } else if tray_visual != p.tray_visual {
+                    for (i, item) in state.tray_items.iter().take(l.tray_slots).enumerate() {
+                        let child = GetDlgItem(p.tray, (TRAY_ICON + i) as i32);
+                        if !child.is_null() {
+                            pending_texts.push((child, item.name.clone()));
+                        }
+                    }
                 }
-                InvalidateRect(p.dock, null(), 0);
-                InvalidateRect(p.tray, null(), 0);
-                RedrawWindow(p.dock, null(), null_mut(), RDW_INVALIDATE | RDW_ALLCHILDREN);
-                RedrawWindow(p.tray, null(), null_mut(), RDW_INVALIDATE | RDW_ALLCHILDREN);
+                if dock_rebuilt || layout_changed || dock_visual != p.dock_visual {
+                    p.dock_visual = dock_visual;
+                    pending_redraws.push(p.dock);
+                }
+                if tray_rebuilt || layout_changed || tray_visual != p.tray_visual {
+                    p.tray_visual = tray_visual;
+                    pending_redraws.push(p.tray);
+                }
             }
         }
     });
+    // Run Win32 calls that synchronously dispatch WM_DRAWITEM after releasing STATE borrow.
+    unsafe {
+        for (child, label) in pending_texts {
+            SetWindowTextW(child, wide(&label).as_ptr());
+        }
+        for hwnd in pending_redraws {
+            RedrawWindow(
+                hwnd,
+                null(),
+                null_mut(),
+                RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_NOERASE,
+            );
+        }
+    }
 }
 
 unsafe extern "system" fn win_event(
@@ -777,7 +897,12 @@ fn tick() {
                     }
                 }
                 if changed {
-                    RedrawWindow(p.tray, null(), null_mut(), RDW_INVALIDATE | RDW_ALLCHILDREN);
+                    RedrawWindow(
+                        p.tray,
+                        null(),
+                        null_mut(),
+                        RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_NOERASE,
+                    );
                 }
             }
         }
@@ -859,12 +984,12 @@ unsafe fn click(owner: HWND, id: usize) {
         BATTERY => shell::launch(owner, "ms-settings:batterysaver"),
         CLOCK => shell::launch(owner, "ms-settings:dateandtime"),
         OVERFLOW => overflow_menu(owner),
-        NOTIFICATIONS => notification_menu(owner),
+        NOTIFICATIONS => toggle_tray_popup(owner),
         id if (TRAY_ICON..TRAY_ICON + 3).contains(&id) => {
             let pid =
                 STATE.with(|s| Some(s.borrow().as_ref()?.tray_items.get(id - TRAY_ICON)?.pid));
-            if !pid.is_some_and(|p| activate_tray_window(p)) {
-                notification_menu(owner);
+            if let Some(pid) = pid {
+                activate_tray_window(pid);
             }
         }
         id if id >= APP => {
@@ -886,64 +1011,258 @@ unsafe fn click(owner: HWND, id: usize) {
     }
 }
 
-unsafe fn notification_menu(owner: HWND) {
-    let items = crate::tray::snapshot();
-    let menu = CreatePopupMenu();
-    if menu.is_null() {
+unsafe fn close_tray_popup() {
+    let popup = STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let s = s.as_mut()?;
+        let popup = s.tray_popup.take()?;
+        s.tray_popup_closed_at = GetTickCount64();
+        Some(popup)
+    });
+    if let Some(popup) = popup {
+        DestroyWindow(popup.tooltip);
+        DestroyWindow(popup.hwnd);
+    }
+}
+
+unsafe fn toggle_tray_popup(owner: HWND) {
+    let (already_open, recently_closed) = STATE.with(|s| {
+        let s = s.borrow();
+        let Some(s) = s.as_ref() else {
+            return (false, false);
+        };
+        (
+            s.tray_popup.is_some(),
+            GetTickCount64().saturating_sub(s.tray_popup_closed_at) < 250,
+        )
+    });
+    if already_open {
+        close_tray_popup();
         return;
     }
-    let entries = match items {
-        Ok(items) if !items.is_empty() => items,
-        result => {
-            let message = if let Err(code) = result {
-                format!("Không đọc được system tray (mã {code})")
-            } else {
-                "Chưa tìm thấy biểu tượng đang hoạt động".into()
-            };
-            AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, wide(&message).as_ptr());
-            menu_at(owner, menu);
-            return;
-        }
+    if recently_closed {
+        return;
+    }
+    let panel_info = STATE.with(|s| {
+        let s = s.borrow();
+        let s = s.as_ref()?;
+        let p = s.panels.iter().find(|p| p.tray == owner)?;
+        Some((p.monitor, p.dpi, p.layout))
+    });
+    let Some((monitor, dpi, bar_layout)) = panel_info else {
+        return;
     };
-    let mut images = Vec::new();
-    let dc = GetDC(owner);
-    let edge = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(owner)).max(16);
-    for (index, item) in entries.iter().enumerate() {
-        let id = index + 1;
-        AppendMenuW(
-            menu,
-            MF_STRING,
-            id,
-            wide(&item.name.replace('&', "&&")).as_ptr(),
+    let all_items = crate::tray::snapshot().unwrap_or_default();
+    let overflow: Vec<crate::tray::Item> =
+        all_items.into_iter().skip(bar_layout.tray_slots).collect();
+    let items = if overflow.is_empty() {
+        crate::tray::snapshot().unwrap_or_default()
+    } else {
+        overflow
+    };
+    let px = |n: i32| n * dpi as i32 / 96;
+    let anchor_x = monitor.left + bar_layout.tray_x + px(21);
+    let bar_y = monitor.top + bar_layout.y;
+    let pop = tray_popup_layout(
+        items.len(),
+        anchor_x,
+        bar_y,
+        monitor.left,
+        monitor.right,
+        dpi,
+    );
+    let instance = GetModuleHandleW(null());
+    let hwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        wide("PuwBar.TrayPopup").as_ptr(),
+        wide("PuwBar — system tray").as_ptr(),
+        WS_POPUP | WS_CLIPCHILDREN,
+        pop.x,
+        pop.y,
+        pop.width,
+        pop.height,
+        owner,
+        null_mut(),
+        instance,
+        null(),
+    );
+    if hwnd.is_null() {
+        return;
+    }
+    SetLayeredWindowAttributes(hwnd, 0, 238, LWA_ALPHA);
+    let radius = px(12);
+    let region = CreateRoundRectRgn(0, 0, pop.width + 1, pop.height + 1, radius * 2, radius * 2);
+    if SetWindowRgn(hwnd, region, 1) == 0 {
+        DeleteObject(region);
+    }
+    let tooltip = create_tooltip(hwnd);
+    for (index, item) in items.iter().enumerate() {
+        let col = (index % pop.cols) as i32;
+        let row = (index / pop.cols) as i32;
+        let left = pop.padding + col * pop.cell;
+        let top = pop.padding + row * pop.cell;
+        button_at(
+            hwnd,
+            tooltip,
+            TRAY_POPUP_ITEM + index,
+            &item.name,
+            RECT {
+                left,
+                top,
+                right: left + pop.cell,
+                bottom: top + pop.cell,
+            },
         );
-        if !item.icon.0.is_null() {
-            if let Some(image) = Surface::new(dc, edge, edge) {
-                DrawIconEx(
-                    image.dc,
-                    0,
-                    0,
-                    item.icon.0,
-                    edge,
-                    edge,
-                    0,
-                    null_mut(),
-                    DI_NORMAL,
+    }
+    STATE.with(|s| {
+        if let Some(s) = s.borrow_mut().as_mut() {
+            s.tray_popup = Some(TrayPopup {
+                hwnd,
+                tooltip,
+                items,
+            });
+        }
+    });
+    ShowWindow(hwnd, SW_SHOW);
+    SetForegroundWindow(hwnd);
+}
+
+unsafe extern "system" fn tray_popup_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    match msg {
+        WM_ERASEBKGND => return 1,
+        WM_PAINT => {
+            let mut ps: PAINTSTRUCT = std::mem::zeroed();
+            let dc = BeginPaint(hwnd, &mut ps);
+            let mut rect: RECT = std::mem::zeroed();
+            GetClientRect(hwnd, &mut rect);
+            let canvas = Surface::new(dc, rect.right, rect.bottom);
+            let target = canvas.as_ref().map(|s| s.dc).unwrap_or(dc);
+            glass_fill(target, rect, 0, rect.bottom);
+            let pen = CreatePen(PS_SOLID, 1, rgb(65, 77, 93));
+            let old = SelectObject(target, pen);
+            let old_brush = SelectObject(target, GetStockObject(HOLLOW_BRUSH));
+            let radius = 24 * GetDpiForWindow(hwnd).max(96) as i32 / 96;
+            RoundRect(target, 0, 0, rect.right, rect.bottom, radius, radius);
+            SelectObject(target, old_brush);
+            SelectObject(target, old);
+            DeleteObject(pen);
+            let empty = STATE.with(|s| {
+                s.borrow()
+                    .as_ref()
+                    .and_then(|s| s.tray_popup.as_ref())
+                    .is_some_and(|p| p.items.is_empty())
+            });
+            if empty {
+                let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                text(
+                    target,
+                    "—",
+                    rect,
+                    14 * dpi / 96,
+                    "Segoe UI",
+                    rgb(180, 192, 210),
                 );
-                let info = MENUITEMINFOW {
-                    cbSize: size_of::<MENUITEMINFOW>() as _,
-                    fMask: MIIM_BITMAP,
-                    hbmpItem: image.bitmap,
-                    ..std::mem::zeroed()
-                };
-                SetMenuItemInfoW(menu, id as _, 0, &info);
-                images.push(image);
+            }
+            if let Some(canvas) = canvas {
+                canvas.present(dc);
+            }
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        WM_DRAWITEM => {
+            draw_tray_popup_item(&*(l as *const DRAWITEMSTRUCT));
+            return 1;
+        }
+        WM_NOTIFY => {
+            let info = l as *mut NMTTDISPINFOW;
+            if !info.is_null() && (*info).hdr.code == TTN_GETDISPINFOW {
+                GetWindowTextW((*info).hdr.idFrom as HWND, (*info).szText.as_mut_ptr(), 80);
+                (*info).lpszText = (*info).szText.as_mut_ptr();
+                return 0;
             }
         }
+        WM_COMMAND => {
+            let id = w & 0xffff;
+            if id >= TRAY_POPUP_ITEM {
+                let pid = STATE.with(|s| {
+                    s.borrow()
+                        .as_ref()?
+                        .tray_popup
+                        .as_ref()?
+                        .items
+                        .get(id - TRAY_POPUP_ITEM)
+                        .map(|item| item.pid)
+                });
+                close_tray_popup();
+                if let Some(pid) = pid {
+                    activate_tray_window(pid);
+                }
+            }
+            return 0;
+        }
+        WM_KEYDOWN if w == VK_ESCAPE as usize => {
+            close_tray_popup();
+            return 0;
+        }
+        WM_ACTIVATE if (w & 0xffff) == WA_INACTIVE as usize => {
+            close_tray_popup();
+            return 0;
+        }
+        _ => {}
     }
-    ReleaseDC(owner, dc);
-    let choice = menu_at(owner, menu) as usize;
-    if let Some(item) = choice.checked_sub(1).and_then(|i| entries.get(i)) {
-        activate_tray_window(item.pid);
+    DefWindowProcW(hwnd, msg, w, l)
+}
+
+unsafe fn draw_tray_popup_item(draw: &DRAWITEMSTRUCT) {
+    let canvas = Surface::new(draw.hDC, draw.rcItem.right, draw.rcItem.bottom);
+    let dc = canvas.as_ref().map(|s| s.dc).unwrap_or(draw.hDC);
+    let r = draw.rcItem;
+    let dpi = GetDpiForWindow(draw.hwndItem).max(96) as i32;
+    let px = |n| n * dpi / 96;
+    let pressed = draw.itemState & ODS_SELECTED != 0;
+    let mut parent_rect: RECT = std::mem::zeroed();
+    let mut item_rect: RECT = std::mem::zeroed();
+    let parent = GetParent(draw.hwndItem);
+    GetClientRect(parent, &mut parent_rect);
+    GetWindowRect(draw.hwndItem, &mut item_rect);
+    MapWindowPoints(
+        null_mut(),
+        parent,
+        &mut item_rect as *mut RECT as *mut POINT,
+        2,
+    );
+    glass_fill(dc, r, item_rect.top, parent_rect.bottom.max(1));
+    if pressed {
+        let brush = CreateSolidBrush(rgb(55, 68, 86));
+        let old = SelectObject(dc, brush);
+        let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+        RoundRect(dc, 2, 2, r.right - 2, r.bottom - 2, px(8), px(8));
+        SelectObject(dc, old_pen);
+        SelectObject(dc, old);
+        DeleteObject(brush);
+    }
+    let id = draw.CtlID as usize;
+    if id >= TRAY_POPUP_ITEM {
+        STATE.with(|s| {
+            let Ok(s) = s.try_borrow() else {
+                return;
+            };
+            if let Some(item) = s
+                .as_ref()
+                .and_then(|s| s.tray_popup.as_ref())
+                .and_then(|p| p.items.get(id - TRAY_POPUP_ITEM))
+            {
+                let edge = px(20);
+                let x = (r.right - edge) / 2;
+                let y = (r.bottom - edge) / 2;
+                if !item.icon.0.is_null() {
+                    DrawIconEx(dc, x, y, item.icon.0, edge, edge, 0, null_mut(), DI_NORMAL);
+                }
+            }
+        });
+    }
+    if let Some(canvas) = canvas {
+        canvas.present(draw.hDC);
     }
 }
 
@@ -1259,15 +1578,17 @@ unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
         DeleteObject(bg);
     }
     let center = (r.right + r.left) / 2;
-    let y = (r.bottom - px(32)) / 2;
+    let icon_edge = px(24);
+    let y = (r.bottom - icon_edge) / 2;
     let id = draw.CtlID as usize;
     match id {
         START => {
             let brush = CreateSolidBrush(rgb(45, 185, 240));
-            let size = px(14);
+            let size = px(10);
             let gap = px(2);
+            let start_y = (r.bottom - (size * 2 + gap)) / 2;
             for x in [center - size - gap / 2, center + gap / 2] {
-                for top in [y, y + size + gap] {
+                for top in [start_y, start_y + size + gap] {
                     FillRect(
                         dc,
                         &RECT {
@@ -1296,11 +1617,10 @@ unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
         }
         OVERFLOW => text(dc, "···", r, px(20), "Segoe UI", rgb(235, 240, 248)),
         id if (TRAY_ICON..TRAY_ICON + 3).contains(&id) => STATE.with(|s| {
-            if let Some(item) = s
-                .borrow()
-                .as_ref()
-                .and_then(|s| s.tray_items.get(id - TRAY_ICON))
-            {
+            let Ok(s) = s.try_borrow() else {
+                return;
+            };
+            if let Some(item) = s.as_ref().and_then(|s| s.tray_items.get(id - TRAY_ICON)) {
                 DrawIconEx(
                     dc,
                     center - px(8),
@@ -1394,14 +1714,16 @@ unsafe fn draw_button(draw: &DRAWITEMSTRUCT) {
             );
         }
         id if id >= APP => STATE.with(|s| {
-            let s = s.borrow();
+            let Ok(s) = s.try_borrow() else {
+                return;
+            };
             if let Some(g) = s.as_ref().and_then(|s| s.groups.get(id - APP)) {
                 let icon = if g.icon.0.is_null() {
                     LoadIconW(null_mut(), IDI_APPLICATION)
                 } else {
                     g.icon.0
                 };
-                draw_app_icon(dc, icon, center - px(16), y, px(32));
+                draw_app_icon(dc, icon, center - icon_edge / 2, y, icon_edge);
                 if !g.pinned
                     && id > APP
                     && s.as_ref().is_some_and(|s| s.groups[id - APP - 1].pinned)

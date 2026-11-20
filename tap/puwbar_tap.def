@@ -1,0 +1,4 @@
+LIBRARY puwbar_tap
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

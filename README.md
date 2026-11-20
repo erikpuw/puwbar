@@ -7,7 +7,21 @@ và cách đáy màn hình 4 DIP. Cụm trạng thái nằm riêng bên phải.
 trên máy phát triển, kể cả khi tiến trình chính bị buộc dừng. Chưa thay thế đầy đủ
 mọi chức năng của taskbar Windows.
 
-## Chạy
+## Chạy (chế độ mặc định — tùy biến trực tiếp Taskbar Windows 11)
+
+Chạy `target/release/puwbar.exe` (cần có `puwbar_tap.dll` cùng thư mục, được `cargo build --release` tự build). Không cần quyền quản trị và không phụ thuộc Windhawk hay phần mềm bên thứ ba.
+
+PuwBar dùng API chuẩn `InitializeXamlDiagnosticsEx` của `Windows.UI.Xaml.dll` để gắn `puwbar_tap.dll` vào cây giao diện XAML của taskbar Windows 11:
+- Biến taskbar gốc thành 2 cụm kính mờ nổi bo góc (`AcrylicBrush` xanh đen, bo góc 14px, cách đáy 4px).
+- Giữ nguyên 100% tính năng gốc của Windows 11: animation RunCat 365, chuột trái/phải mọi icon tray (UniKey, Windhawk, PUW Notch, SecurityHealth...), lưới icon overflow gốc khi bấm `^`, Start menu và xem trước cửa sổ.
+- Có icon riêng cho `puwbar.exe` và biểu tượng trong **System Tray**: bấm vào icon PuwBar ở tray để bật/tắt **Khởi động cùng Windows** (tạo Scheduled Task `PuwBar` giống `PuwNotch` nhưng **không trễ**, ưu tiên `Priority 4`, chạy trực tiếp không qua PowerShell để áp giao diện sớm hơn khi đăng nhập; có tự thử lại tới 30 giây chờ Explorer XAML sẵn sàng và fallback về `HKCU\...\Run` nếu từ chối UAC), **Áp dụng lại giao diện**, hoặc **Thoát PuwBar**.
+- Nhấn **Ctrl+Alt+F12** (hoặc chọn **Thoát PuwBar** ở tray) để thoát: PuwBar tự trả toàn bộ thuộc tính XAML về nguyên bản mà không cần khởi động lại Explorer.
+
+```powershell
+.\target\release\puwbar.exe
+```
+
+## Chế độ dock độc lập (dự phòng `--standalone` / `--preview`)
 
 Mở `target/release/puwbar.exe` sau khi build. Chương trình không yêu cầu quyền quản trị.
 Để xem dock mà giữ taskbar Windows nguyên trạng:
@@ -70,7 +84,7 @@ Chưa có xem trước cửa sổ, kéo thả, chỉnh ghim trong PuwBar, quick 
 Start menu riêng hoặc tự khởi động. Đổi cấu hình màn hình/DPI khi đang chạy sẽ cho
 PuwBar thoát và khôi phục taskbar; mở lại để nhận bố cục mới.
 
-Hai cụm dùng nền xanh đen chuyển sắc bán trong suốt, bo góc 16 DIP. Icon ứng dụng rộng 32 DIP trong ô 60 DIP.
+Hai cụm dùng nền xanh đen chuyển sắc bán trong suốt, bo góc 16 DIP. Icon ứng dụng rộng 24 DIP trong ô 46 DIP. Popup system tray hiển thị dạng lưới icon tối bo góc.
 
 ## Build và kiểm tra
 

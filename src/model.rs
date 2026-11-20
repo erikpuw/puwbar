@@ -12,6 +12,17 @@ pub struct Layout {
     pub overflow: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrayPopupLayout {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub cols: usize,
+    pub cell: i32,
+    pub padding: i32,
+}
+
 pub const BOTTOM_GAP_DIP: i32 = 4;
 
 pub fn layout(width: i32, height: i32, dpi: u32, apps: usize, promoted: usize) -> Option<Layout> {
@@ -20,7 +31,7 @@ pub fn layout(width: i32, height: i32, dpi: u32, apps: usize, promoted: usize) -
     }
     let px = |n: i32| n * dpi as i32 / 96;
     let (bar_height, slot, padding, margin, gap, tray_width) =
-        (px(48), px(60), px(10), px(8), px(16), px(260));
+        (px(48), px(46), px(10), px(8), px(16), px(260));
     let spare = width - 2 * margin - gap - tray_width - 2 * padding - 3 * slot;
     let tray_slots = promoted.min(3).min((spare.max(0) / px(28)) as usize);
     let tray_width = tray_width + tray_slots as i32 * px(28);
@@ -49,6 +60,39 @@ pub fn layout(width: i32, height: i32, dpi: u32, apps: usize, promoted: usize) -
         capacity,
         overflow,
     })
+}
+
+pub fn tray_popup_layout(
+    item_count: usize,
+    anchor_x: i32,
+    bar_y: i32,
+    monitor_left: i32,
+    monitor_right: i32,
+    dpi: u32,
+) -> TrayPopupLayout {
+    let dpi = dpi.clamp(48, 768) as i32;
+    let px = |n: i32| n * dpi / 96;
+    let cols = item_count.clamp(1, 5);
+    let rows = item_count.max(1).div_ceil(cols);
+    let cell = px(40);
+    let padding = px(8);
+    let gap = px(8);
+    let margin = px(8);
+    let width = 2 * padding + cols as i32 * cell;
+    let height = 2 * padding + rows as i32 * cell;
+    let min_x = monitor_left + margin;
+    let max_x = (monitor_right - margin - width).max(min_x);
+    let x = (anchor_x - width / 2).clamp(min_x, max_x);
+    let y = (bar_y - gap - height).max(0);
+    TrayPopupLayout {
+        x,
+        y,
+        width,
+        height,
+        cols,
+        cell,
+        padding,
+    }
 }
 
 pub fn group_key(path: &str, app_id: &str) -> String {
@@ -146,5 +190,20 @@ mod tests {
             group_key("host.exe", "Store!App"),
             group_key("host.exe", "Mail!App")
         );
+    }
+
+    #[test]
+    fn tray_popup_uses_icon_grid_and_stays_inside_monitor() {
+        let p = tray_popup_layout(8, 1700, 1028, 0, 1920, 96);
+        assert_eq!(p.cols, 5);
+        assert_eq!(p.width, 2 * 8 + 5 * 40);
+        assert_eq!(p.height, 2 * 8 + 2 * 40);
+        assert!(p.x >= 8);
+        assert!(p.x + p.width <= 1912);
+        assert_eq!(p.y + p.height + 8, 1028);
+
+        let right_clamped = tray_popup_layout(3, 1915, 1028, 0, 1920, 96);
+        assert_eq!(right_clamped.cols, 3);
+        assert!(right_clamped.x + right_clamped.width <= 1912);
     }
 }
