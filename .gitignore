@@ -11,7 +11,8 @@
 *.log
 *.diagnostics.txt
 
-# Local indexes, IDE & user backups
+# Local docs, indexes, IDE & user backups
+/docs/
 /.gitnexus/
 /.vs/
 /.vscode/

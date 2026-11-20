@@ -43,4 +43,4 @@ The final single-file executable is written to `target\release\puwbar.exe`. `bui
 
 ## Release notes
 
-See [docs/releases/v1.0.1.md](docs/releases/v1.0.1.md) for the v1.0.1 changelog.
+See [Releases](https://github.com/erikpuw/puwbar/releases) for changelogs.

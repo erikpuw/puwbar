@@ -43,4 +43,4 @@ File đầu ra nằm tại `target\release\puwbar.exe`. `build.rs` tự biên d�
 
 ## Ghi chú phát hành
 
-Xem chi tiết các thay đổi tại [docs/releases/v1.0.1.md](docs/releases/v1.0.1.md).
+Xem chi tiết các thay đổi tại mục [Releases](https://github.com/erikpuw/puwbar/releases).
