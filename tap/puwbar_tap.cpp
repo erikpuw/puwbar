@@ -546,6 +546,8 @@ private:
             || name == L"BackgroundStroke"
             || name == L"SystemTrayFrameGrid"
             || name == L"OverflowFlyoutBackgroundBorder"
+            || type == L"Windows.UI.Xaml.Controls.FlyoutPresenter"
+            || name == L"RunningIndicator"
             || (name == L"ExperienceToggleButtonRootPanel"
                 && parentType == L"Taskbar.AugmentedEntryPointButton");
     }
@@ -598,9 +600,10 @@ private:
                 setProp(
                     xaml::FrameworkElement::VerticalAlignmentProperty(),
                     winrt::box_value(startAligned ? xaml::VerticalAlignment::Top : xaml::VerticalAlignment::Center));
+                // Keep top margin minimal (8px) so vertical dock fits all icons without premature '...' overflow.
                 setProp(
                     xaml::FrameworkElement::MarginProperty(),
-                    winrt::box_value(startAligned ? xaml::Thickness{0.0, 8.0, 0.0, 260.0} : xaml::Thickness{0.0, 120.0, 0.0, 260.0}));
+                    winrt::box_value(xaml::Thickness{0.0, 8.0, 0.0, 260.0}));
             } else {
                 setProp(xaml::FrameworkElement::WidthProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
                 setProp(xaml::FrameworkElement::HeightProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
@@ -617,10 +620,9 @@ private:
 
         if (name == L"RootGrid" && parentType == L"Taskbar.TaskbarFrame") {
             if (vertical) {
-                setProp(controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{0.0, 3.0, 0.0, 3.0}));
-                setProp(
-                    xaml::FrameworkElement::MarginProperty(),
-                    winrt::box_value(edge == TaskbarEdge::Right ? xaml::Thickness{2.0, 0.0, 4.0, 0.0} : xaml::Thickness{4.0, 0.0, 2.0, 0.0}));
+                // Symmetric horizontal margin (2px each side) so icons stay perfectly centered inside the vertical pill.
+                setProp(controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{0.0, 4.0, 0.0, 4.0}));
+                setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{2.0, 0.0, 2.0, 0.0}));
             } else {
                 setProp(controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{3.0, 0.0, 3.0, 0.0}));
                 setProp(
@@ -632,7 +634,7 @@ private:
 
         if (name == L"SystemTrayFrameGrid") {
             xaml::Thickness margin = vertical
-                ? (edge == TaskbarEdge::Right ? xaml::Thickness{2.0, 0.0, 4.0, 8.0} : xaml::Thickness{4.0, 0.0, 2.0, 8.0})
+                ? xaml::Thickness{2.0, 0.0, 2.0, 8.0}
                 : (edge == TaskbarEdge::Top ? xaml::Thickness{0.0, 4.0, 8.0, 2.0} : xaml::Thickness{0.0, 2.0, 8.0, 4.0});
             xaml::Thickness pad = vertical
                 ? xaml::Thickness{0.0, 6.0, 0.0, 6.0}
@@ -642,6 +644,17 @@ private:
                 setProp(controls::StackPanel::PaddingProperty(), winrt::box_value(pad));
             } else if (obj.try_as<controls::Grid>()) {
                 setProp(controls::Grid::PaddingProperty(), winrt::box_value(pad));
+            }
+            return;
+        }
+
+        if (name == L"RunningIndicator") {
+            if (edge == TaskbarEdge::Right) {
+                setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Right));
+            } else if (edge == TaskbarEdge::Left) {
+                setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Left));
+            } else {
+                setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Center));
             }
             return;
         }
@@ -725,13 +738,26 @@ private:
             return;
         }
 
-        // 5. Matching glass background for the native tray overflow icon grid
+        // 5. Matching glass background for tray overflow & taskbar '...' app overflow flyouts
         if (name == L"OverflowFlyoutBackgroundBorder") {
             SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
             SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            return;
+        }
+
+        if (type == L"Windows.UI.Xaml.Controls.FlyoutPresenter") {
+            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj));
+            SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+            SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
+            SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            return;
+        }
+
+        if (name == L"RunningIndicator") {
+            ApplyLayoutProps(obj, type, name, parentType, true);
             return;
         }
 
@@ -870,6 +896,7 @@ private:
                 if (t.type == L"Taskbar.TaskbarFrame"
                     || (t.name == L"RootGrid" && t.parentType == L"Taskbar.TaskbarFrame")
                     || t.name == L"SystemTrayFrameGrid"
+                    || t.name == L"RunningIndicator"
                     || (t.name == L"ExperienceToggleButtonRootPanel"
                         && t.parentType == L"Taskbar.AugmentedEntryPointButton")) {
                     targets.push_back(t);
