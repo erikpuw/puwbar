@@ -1,3 +1,18 @@
+# Build outputs & binaries
 /target/
-/.gitnexus/
 /output/
+*.exe
+*.dll
+*.pdb
+*.obj
+*.lib
+*.exp
+*.res
+*.log
+*.diagnostics.txt
+
+# Local indexes, IDE & user backups
+/.gitnexus/
+/.vs/
+/.vscode/
+/themes/

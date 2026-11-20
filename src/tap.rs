@@ -27,13 +27,82 @@ const TRAY_CALLBACK: u32 = WM_APP + 10;
 const TRAY_UID: u32 = 1;
 const CMD_AUTOSTART: u32 = 1001;
 const CMD_REAPPLY: u32 = 1002;
-const CMD_EXIT: u32 = 1003;
+const CMD_LANG_VI: u32 = 1003;
+const CMD_LANG_EN: u32 = 1004;
+const CMD_ABOUT: u32 = 1005;
+const CMD_EXIT: u32 = 1006;
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "PuwBar";
+const APP_KEY: &str = "Software\\PuwBar";
+const LANG_VALUE: &str = "Language";
 const TASK_NAME: &str = "PuwBar";
 const STOP_EVENT_NAME: &str = "Local\\PuwBar.StopEvent";
 const READY_EVENT_NAME: &str = "Local\\PuwBar.TapReady";
 const RELOAD_EVENT_NAME: &str = "Local\\PuwBar.ReloadEvent";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lang {
+    Vi,
+    En,
+}
+
+fn parse_lang(code: &str) -> Lang {
+    if code.trim().eq_ignore_ascii_case("en") {
+        Lang::En
+    } else {
+        Lang::Vi
+    }
+}
+
+unsafe fn read_lang() -> Lang {
+    let mut buf = [0u16; 32];
+    let mut bytes = (buf.len() * size_of::<u16>()) as u32;
+    let ok = RegGetValueW(
+        HKEY_CURRENT_USER,
+        wide(APP_KEY).as_ptr(),
+        wide(LANG_VALUE).as_ptr(),
+        RRF_RT_REG_SZ,
+        null_mut(),
+        buf.as_mut_ptr().cast(),
+        &mut bytes,
+    ) == 0;
+    if !ok || bytes <= 2 {
+        return Lang::Vi;
+    }
+    let s = String::from_utf16_lossy(&buf[..(bytes as usize / 2).saturating_sub(1)]);
+    parse_lang(&s)
+}
+
+unsafe fn save_lang(lang: Lang) {
+    let mut hkey = null_mut();
+    if RegCreateKeyExW(
+        HKEY_CURRENT_USER,
+        wide(APP_KEY).as_ptr(),
+        0,
+        null(),
+        0,
+        KEY_SET_VALUE,
+        null(),
+        &mut hkey,
+        null_mut(),
+    ) != 0
+    {
+        return;
+    }
+    let val = wide(match lang {
+        Lang::Vi => "vi",
+        Lang::En => "en",
+    });
+    RegSetValueExW(
+        hkey,
+        wide(LANG_VALUE).as_ptr(),
+        0,
+        REG_SZ,
+        val.as_ptr().cast(),
+        (val.len() * size_of::<u16>()) as u32,
+    );
+    RegCloseKey(hkey);
+}
 
 type InitXamlDiagExFn = unsafe extern "system" fn(
     end_point_name: *const u16,
@@ -356,7 +425,7 @@ unsafe fn load_app_icon(instance: HINSTANCE) -> HICON {
     }
 }
 
-unsafe fn add_tray_icon(hwnd: HWND, icon: HICON) {
+unsafe fn update_tray_icon(hwnd: HWND, icon: HICON, lang: Lang, action: u32) {
     let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
     nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
     nid.hWnd = hwnd;
@@ -364,10 +433,17 @@ unsafe fn add_tray_icon(hwnd: HWND, icon: HICON) {
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = TRAY_CALLBACK;
     nid.hIcon = icon;
-    let tip = wide("PuwBar — Taskbar kính mờ");
+    let tip = wide(match lang {
+        Lang::Vi => "PuwBar — Taskbar kính mờ",
+        Lang::En => "PuwBar — Frosted glass taskbar",
+    });
     let count = tip.len().min(nid.szTip.len());
     nid.szTip[..count].copy_from_slice(&tip[..count]);
-    Shell_NotifyIconW(NIM_ADD, &nid);
+    Shell_NotifyIconW(action, &nid);
+}
+
+unsafe fn add_tray_icon(hwnd: HWND, icon: HICON) {
+    update_tray_icon(hwnd, icon, read_lang(), NIM_ADD);
 }
 
 unsafe fn remove_tray_icon(hwnd: HWND) {
@@ -378,31 +454,107 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
     Shell_NotifyIconW(NIM_DELETE, &nid);
 }
 
+unsafe fn show_about_dialog(hwnd: HWND, lang: Lang) {
+    let version = env!("CARGO_PKG_VERSION");
+    let (title, body) = match lang {
+        Lang::Vi => (
+            "Giới thiệu PuwBar",
+            format!(
+                "PuwBar v{version}\n\n\
+Tùy biến thanh taskbar gốc Windows 11 thành các cụm kính mờ nổi, giữ nguyên toàn bộ tính năng và system tray gốc.\n\n\
+Tác giả: erikpuw\n\
+GitHub: https://github.com/erikpuw/puwbar\n\
+Phím tắt thoát nhanh: Ctrl+Alt+F12"
+            ),
+        ),
+        Lang::En => (
+            "About PuwBar",
+            format!(
+                "PuwBar v{version}\n\n\
+Styles the native Windows 11 taskbar into floating frosted glass pills while keeping all native taskbar and system tray features.\n\n\
+Author: erikpuw\n\
+GitHub: https://github.com/erikpuw/puwbar\n\
+Quick exit shortcut: Ctrl+Alt+F12"
+            ),
+        ),
+    };
+    MessageBoxW(
+        hwnd,
+        wide(&body).as_ptr(),
+        wide(title).as_ptr(),
+        MB_OK | MB_ICONINFORMATION,
+    );
+}
+
 unsafe fn show_tray_menu(hwnd: HWND) {
     let menu = CreatePopupMenu();
     if menu.is_null() {
         return;
     }
+    let lang = read_lang();
     let autostart = is_autostart_enabled();
+    let (lbl_auto, lbl_reapply, lbl_lang, lbl_about, lbl_exit) = match lang {
+        Lang::Vi => (
+            "Khởi động cùng Windows",
+            "Áp dụng lại giao diện",
+            "Ngôn ngữ",
+            "Giới thiệu PuwBar",
+            "Thoát PuwBar\tCtrl+Alt+F12",
+        ),
+        Lang::En => (
+            "Start with Windows",
+            "Reapply taskbar glass",
+            "Language",
+            "About PuwBar",
+            "Exit PuwBar\tCtrl+Alt+F12",
+        ),
+    };
     AppendMenuW(
         menu,
         MF_STRING | if autostart { MF_CHECKED } else { MF_UNCHECKED },
         CMD_AUTOSTART as usize,
-        wide("Khởi động cùng Windows").as_ptr(),
+        wide(lbl_auto).as_ptr(),
     );
     AppendMenuW(
         menu,
         MF_STRING,
         CMD_REAPPLY as usize,
-        wide("Áp dụng lại giao diện").as_ptr(),
+        wide(lbl_reapply).as_ptr(),
     );
-    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    let lang_menu = CreatePopupMenu();
+    if !lang_menu.is_null() {
+        AppendMenuW(
+            lang_menu,
+            MF_STRING
+                | if lang == Lang::Vi {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                },
+            CMD_LANG_VI as usize,
+            wide("Tiếng Việt").as_ptr(),
+        );
+        AppendMenuW(
+            lang_menu,
+            MF_STRING
+                | if lang == Lang::En {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                },
+            CMD_LANG_EN as usize,
+            wide("English").as_ptr(),
+        );
+        AppendMenuW(menu, MF_POPUP, lang_menu as usize, wide(lbl_lang).as_ptr());
+    }
     AppendMenuW(
         menu,
         MF_STRING,
-        CMD_EXIT as usize,
-        wide("Thoát PuwBar\tCtrl+Alt+F12").as_ptr(),
+        CMD_ABOUT as usize,
+        wide(lbl_about).as_ptr(),
     );
+    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    AppendMenuW(menu, MF_STRING, CMD_EXIT as usize, wide(lbl_exit).as_ptr());
 
     let mut pt = POINT { x: 0, y: 0 };
     GetCursorPos(&mut pt);
@@ -427,6 +579,21 @@ unsafe fn show_tray_menu(hwnd: HWND) {
                 SetEvent(reload);
             }
         }
+        CMD_LANG_VI => {
+            save_lang(Lang::Vi);
+            let icon = TRAY_ICON_HANDLE.with(|h| h.get()) as HICON;
+            if !icon.is_null() {
+                update_tray_icon(hwnd, icon, Lang::Vi, NIM_MODIFY);
+            }
+        }
+        CMD_LANG_EN => {
+            save_lang(Lang::En);
+            let icon = TRAY_ICON_HANDLE.with(|h| h.get()) as HICON;
+            if !icon.is_null() {
+                update_tray_icon(hwnd, icon, Lang::En, NIM_MODIFY);
+            }
+        }
+        CMD_ABOUT => show_about_dialog(hwnd, lang),
         CMD_EXIT => PostQuitMessage(0),
         _ => {}
     }
@@ -609,5 +776,13 @@ mod tests {
             !xml.contains("<Delay>"),
             "taskbar must start before delayed startup apps"
         );
+    }
+
+    #[test]
+    fn language_parsing_defaults_to_vietnamese() {
+        assert_eq!(parse_lang("en"), Lang::En);
+        assert_eq!(parse_lang("EN"), Lang::En);
+        assert_eq!(parse_lang("vi"), Lang::Vi);
+        assert_eq!(parse_lang(""), Lang::Vi);
     }
 }

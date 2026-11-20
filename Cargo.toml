@@ -1,8 +1,8 @@
 [package]
 name = "puwbar"
-version = "0.1.0"
+version = "1.0.1"
 edition = "2021"
-description = "A compact native Windows taskbar"
+description = "Floating frosted glass taskbar styler for Windows 11"
 publish = false
 
 [dependencies]
