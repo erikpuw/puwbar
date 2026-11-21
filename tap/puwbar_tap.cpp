@@ -451,7 +451,7 @@ public:
             if (element.Name) meta.name = element.Name;
 
             std::wstring parentType;
-            bool inTaskbarBackground = false;
+            bool inMainTaskbarBackground = false;
             IXamlDiagnostics* diag = nullptr;
             {
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -460,7 +460,7 @@ public:
                 if (it != m_meta.end()) {
                     parentType = it->second.type;
                 }
-                inTaskbarBackground = HasAncestorTypeLocked(relation.Parent, L"Taskbar.TaskbarBackground");
+                inMainTaskbarBackground = HasAncestorNameLocked(relation.Parent, L"BackgroundControl");
                 diag = m_diag;
                 if (diag) diag->AddRef();
             }
@@ -475,7 +475,7 @@ public:
             winrt::Windows::Foundation::IInspectable insp{raw, winrt::take_ownership_from_abi};
             if (auto depObj = insp.try_as<xaml::DependencyObject>()) {
                 CaptureDispatcher(depObj);
-                std::wstring effectiveParent = inTaskbarBackground ? L"Taskbar.TaskbarBackground" : parentType;
+                std::wstring effectiveParent = inMainTaskbarBackground ? L"Taskbar.BackgroundControl" : parentType;
                 if (IsInteresting(meta.type, meta.name, effectiveParent)) {
                     {
                         std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -528,12 +528,12 @@ private:
         }
     }
 
-    bool HasAncestorTypeLocked(InstanceHandle h, std::wstring const& targetType) const {
+    bool HasAncestorNameLocked(InstanceHandle h, std::wstring const& targetName) const {
         InstanceHandle cur = h;
         for (int depth = 0; depth < 16 && cur != 0; ++depth) {
             auto it = m_meta.find(cur);
             if (it == m_meta.end()) break;
-            if (it->second.type == targetType) return true;
+            if (it->second.name == targetName) return true;
             cur = it->second.parent;
         }
         return false;
@@ -545,11 +545,12 @@ private:
         std::wstring const& parentType) {
         return type == L"Taskbar.TaskbarFrame"
             || (name == L"RootGrid" && parentType == L"Taskbar.TaskbarFrame")
-            || type == L"Taskbar.TaskbarFrameRepeater"
-            || name == L"TaskbarFrameRepeater"
-            || type == L"Taskbar.TaskbarBackground"
+            || (type == L"Taskbar.ExperienceToggleButton" && name == L"LaunchListButton")
+            || (type == L"Taskbar.TaskbarBackground" && name == L"BackgroundControl")
             || ((name == L"BackgroundFill" || name == L"BackgroundStroke")
-                && parentType == L"Taskbar.TaskbarBackground")
+                && parentType == L"Taskbar.BackgroundControl")
+            || name == L"HoverFlyoutBackgroundControl"
+            || name == L"HoverFlyoutBackground"
             || name == L"SystemTrayFrameGrid"
             || name == L"OverflowFlyoutBackgroundBorder"
             || type == L"Windows.UI.Xaml.Controls.FlyoutPresenter"
@@ -630,7 +631,9 @@ private:
                 setProp(controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{0.0, 4.0, 0.0, 4.0}));
                 setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{2.0, 0.0, 2.0, 0.0}));
             } else {
-                setProp(controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{3.0, 0.0, 3.0, 0.0}));
+                // When left-aligned, Windows widens LaunchListButton (45px vs 40px); trim left padding to keep both ends visually symmetric.
+                double leftPad = startAligned ? 0.0 : 3.0;
+                setProp(controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{leftPad, 0.0, 3.0, 0.0}));
                 setProp(
                     xaml::FrameworkElement::MarginProperty(),
                     winrt::box_value(edge == TaskbarEdge::Top ? xaml::Thickness{0.0, 4.0, 0.0, 2.0} : xaml::Thickness{0.0, 2.0, 0.0, 4.0}));
@@ -638,8 +641,12 @@ private:
             return;
         }
 
-        if (type == L"Taskbar.TaskbarFrameRepeater" || name == L"TaskbarFrameRepeater") {
+        if (type == L"Taskbar.ExperienceToggleButton" && name == L"LaunchListButton") {
             if (!vertical) {
+                setProp(
+                    xaml::FrameworkElement::MarginProperty(),
+                    winrt::box_value(startAligned ? xaml::Thickness{-2.0, 0.0, 0.0, 0.0} : xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
+            } else {
                 setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
             }
             return;
@@ -721,10 +728,11 @@ private:
                         try {
                             TaskbarEdge edge = GetTaskbarEdge();
                             if (edge == TaskbarEdge::Bottom || edge == TaskbarEdge::Top) {
+                                double wantLeft = IsTaskbarAlignedStart() ? 0.0 : 3.0;
                                 auto cur = winrt::unbox_value_or<xaml::Thickness>(
-                                    sender.GetValue(dp), xaml::Thickness{3.0, 0.0, 3.0, 0.0});
-                                if (cur.Left != 3.0 || cur.Right != 3.0) {
-                                    sender.SetValue(dp, winrt::box_value(xaml::Thickness{3.0, cur.Top, 3.0, cur.Bottom}));
+                                    sender.GetValue(dp), xaml::Thickness{wantLeft, 0.0, 3.0, 0.0});
+                                if (cur.Left != wantLeft || cur.Right != 3.0) {
+                                    sender.SetValue(dp, winrt::box_value(xaml::Thickness{wantLeft, cur.Top, 3.0, cur.Bottom}));
                                 }
                             }
                         } catch (...) {
@@ -740,37 +748,30 @@ private:
             return;
         }
 
-        // 3. Hide native full-width taskbar background & stroke (ONLY inside Taskbar.TaskbarBackground — never touch thumbnail preview BackgroundFill!)
-        if (type == L"Taskbar.TaskbarBackground"
+        // 3. Hide ONLY the main taskbar's full-width background & stroke (never collapse HoverFlyoutBackgroundControl!)
+        if ((type == L"Taskbar.TaskbarBackground" && name == L"BackgroundControl")
             || ((name == L"BackgroundFill" || name == L"BackgroundStroke")
-                && parentType == L"Taskbar.TaskbarBackground")) {
+                && parentType == L"Taskbar.BackgroundControl")) {
             SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
             return;
         }
 
-        // 3b. Remove Windows 11's extra Left-aligned margin on TaskbarFrameRepeater so Start hugs the pill symmetrically
-        if (type == L"Taskbar.TaskbarFrameRepeater" || name == L"TaskbarFrameRepeater") {
+        // 3b. Trim left offset on Start button (LaunchListButton) when left-aligned so both pill ends match
+        if (type == L"Taskbar.ExperienceToggleButton" && name == L"LaunchListButton") {
             ApplyLayoutProps(obj, type, name, parentType, true);
-            try {
-                auto token = obj.RegisterPropertyChangedCallback(
-                    xaml::FrameworkElement::MarginProperty(),
-                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
-                        try {
-                            TaskbarEdge edge = GetTaskbarEdge();
-                            if (edge == TaskbarEdge::Bottom || edge == TaskbarEdge::Top) {
-                                auto cur = winrt::unbox_value_or<xaml::Thickness>(
-                                    sender.GetValue(dp), xaml::Thickness{0.0, 0.0, 0.0, 0.0});
-                                if (cur.Left != 0.0 || cur.Right != 0.0) {
-                                    sender.SetValue(dp, winrt::box_value(xaml::Thickness{0.0, cur.Top, 0.0, cur.Bottom}));
-                                }
-                            }
-                        } catch (...) {
-                        }
-                    });
-                std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                m_propCallbacks.push_back({winrt::make_weak(obj), xaml::FrameworkElement::MarginProperty(), token});
-            } catch (...) {
-            }
+            return;
+        }
+
+        // 3c. Match PuwBar corner radius & hairline border on thumbnail hover preview while preserving its native frosted glass
+        if (name == L"HoverFlyoutBackgroundControl") {
+            SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+            return;
+        }
+
+        if (name == L"HoverFlyoutBackground") {
+            SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+            SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
+            SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             return;
         }
 
@@ -982,8 +983,7 @@ private:
             for (auto& t : m_tracked) {
                 if (t.type == L"Taskbar.TaskbarFrame"
                     || (t.name == L"RootGrid" && t.parentType == L"Taskbar.TaskbarFrame")
-                    || t.type == L"Taskbar.TaskbarFrameRepeater"
-                    || t.name == L"TaskbarFrameRepeater"
+                    || (t.type == L"Taskbar.ExperienceToggleButton" && t.name == L"LaunchListButton")
                     || t.name == L"SystemTrayFrameGrid"
                     || t.name == L"RunningIndicator"
                     || (t.name == L"ExperienceToggleButtonRootPanel"
