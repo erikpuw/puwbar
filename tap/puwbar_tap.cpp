@@ -127,15 +127,8 @@ struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, ge::IGraphicsE
 
 struct ColorTintEffect : winrt::implements<ColorTintEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
     winrt::hstring m_name{L"Tint"};
-    // Premultiplied RGBA: airy dark-smoke frosted glass (alpha 0.24 for taskbar, 0.44 for text-heavy panels)
-    float m_color[4] = {0.02f, 0.025f, 0.04f, 0.24f};
-
-    explicit ColorTintEffect(float alpha = 0.24f) {
-        m_color[0] = 0.015f * (alpha / 0.24f);
-        m_color[1] = 0.020f * (alpha / 0.24f);
-        m_color[2] = 0.032f * (alpha / 0.24f);
-        m_color[3] = alpha;
-    }
+    // Premultiplied RGBA for unified 62% dark-smoke frosted glass (crisp white text even over pure #FFFFFF windows)
+    float m_color[4] = {0.028f, 0.035f, 0.052f, 0.62f};
 
     winrt::hstring Name() const { return m_name; }
     void Name(winrt::hstring const& v) { m_name = v; }
@@ -217,12 +210,9 @@ struct CompositeEffect : winrt::implements<CompositeEffect, ge::IGraphicsEffect,
 
 struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     comp::Compositor m_compositor{nullptr};
-    float m_tintAlpha = 0.24f;
 
-    explicit PuwGlassBrush(comp::Compositor compositor, float tintAlpha = 0.24f)
-        : m_compositor(std::move(compositor)), m_tintAlpha(tintAlpha) {
-        uint8_t a = static_cast<uint8_t>(tintAlpha > 0.35f ? 140 : 90);
-        FallbackColor(winrt::Windows::UI::Color{a, 18, 22, 32});
+    explicit PuwGlassBrush(comp::Compositor compositor) : m_compositor(std::move(compositor)) {
+        FallbackColor(winrt::Windows::UI::Color{160, 14, 18, 26});
     }
 
     void OnConnected() {
@@ -232,7 +222,7 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
 
                 auto blur = winrt::make_self<GaussianBlurEffect>();
                 blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
-                auto tint = winrt::make_self<ColorTintEffect>(m_tintAlpha);
+                auto tint = winrt::make_self<ColorTintEffect>();
                 auto composite = winrt::make_self<CompositeEffect>();
                 composite->m_src0 = blur.as<ge::IGraphicsEffectSource>();
                 composite->m_src1 = tint.as<ge::IGraphicsEffectSource>();
@@ -257,20 +247,19 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     }
 };
 
-static media::Brush MakePuwGlass(xaml::DependencyObject const& obj, float tintAlpha = 0.24f) {
+static media::Brush MakePuwGlass(xaml::DependencyObject const& obj) {
     try {
         if (auto el = obj.try_as<xaml::UIElement>()) {
             auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
             if (visual) {
                 if (auto compositor = visual.Compositor()) {
-                    return winrt::make<PuwGlassBrush>(compositor, tintAlpha);
+                    return winrt::make<PuwGlassBrush>(compositor);
                 }
             }
         }
     } catch (...) {
     }
-    uint8_t a = static_cast<uint8_t>(tintAlpha > 0.35f ? 140 : 90);
-    return media::SolidColorBrush(winrt::Windows::UI::Color{a, 18, 22, 32});
+    return media::SolidColorBrush(winrt::Windows::UI::Color{160, 14, 18, 26});
 }
 
 static media::SolidColorBrush MakePuwBorder() {
@@ -588,6 +577,25 @@ private:
         }
     }
 
+    void LockGlassBackground(xaml::DependencyObject const& obj, xaml::DependencyProperty const& prop) {
+        try {
+            auto token = obj.RegisterPropertyChangedCallback(
+                prop,
+                [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
+                    try {
+                        auto cur = sender.GetValue(dp);
+                        if (!cur || cur.try_as<media::AcrylicBrush>() || cur.try_as<media::SolidColorBrush>()) {
+                            sender.SetValue(dp, MakePuwGlass(sender));
+                        }
+                    } catch (...) {
+                    }
+                });
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            m_propCallbacks.push_back({winrt::make_weak(obj), prop, token});
+        } catch (...) {
+        }
+    }
+
     void ApplyLayoutProps(
         xaml::DependencyObject const& obj,
         std::wstring const& type,
@@ -805,9 +813,9 @@ private:
             return;
         }
 
-        // 4. Separate floating glass pill for the real Windows 11 System Tray (darker 44% veil so clock/icons stay sharp over bright windows)
+        // 4. Separate floating glass pill for the real Windows 11 System Tray (65% dark-smoke veil for crisp white text on pure white backgrounds)
         if (name == L"SystemTrayFrameGrid") {
-            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj, 0.44f));
+            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
             if (obj.try_as<controls::StackPanel>()) {
                 SaveAndSet(obj, controls::StackPanel::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::StackPanel::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
@@ -831,9 +839,9 @@ private:
             return;
         }
 
-        // 5. Matching glass background (same 12px blur + 44% veil for legibility) for tray overflow & taskbar '...' flyouts
+        // 5. Matching glass background (12px blur + 65% dark-smoke veil) for tray overflow & taskbar '...' flyouts
         if (name == L"OverflowFlyoutBackgroundBorder") {
-            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj, 0.44f));
+            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
             SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
@@ -842,7 +850,7 @@ private:
         }
 
         if (type == L"Windows.UI.Xaml.Controls.FlyoutPresenter") {
-            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj, 0.44f));
+            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj));
             SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
@@ -855,9 +863,9 @@ private:
             try {
                 if (auto ctrl = obj.try_as<controls::Control>()) {
                     if (auto ac = ctrl.Background().try_as<media::AcrylicBrush>()) {
-                        ac.TintColor(winrt::Windows::UI::Color{255, 16, 20, 30});
-                        ac.TintOpacity(0.38);
-                        ac.TintLuminosityOpacity(0.35);
+                        ac.TintColor(winrt::Windows::UI::Color{255, 14, 18, 26});
+                        ac.TintOpacity(0.62);
+                        ac.TintLuminosityOpacity(0.65);
                     }
                 }
             } catch (...) {
@@ -868,21 +876,22 @@ private:
             return;
         }
 
-        // 5c. Matching glass background (12px blur + 44% veil) for taskbar & tray hover tooltips
+        // 5c. Matching glass background (12px blur + 65% dark-smoke veil) for taskbar & tray hover tooltips
         if (type == L"Windows.UI.Xaml.Controls.ToolTip") {
-            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj, 0.44f));
+            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj));
             SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{8.0, 8.0, 8.0, 8.0}));
             SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             return;
         }
 
-        // 5d. Darker translucent glass (same 12px blur + 44% dark-smoke veil) for Notification Center, Calendar & Quick Settings
+        // 5d. Unified 62% dark-smoke glass for Notification Center, Calendar & Quick Settings (locked against VisualState resets)
         if (name == L"NotificationCenterGrid"
             || name == L"CalendarCenterGrid"
             || name == L"ControlCenterRegion"
             || name == L"MediaTransportControlsRegion") {
-            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj, 0.44f));
+            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
+            LockGlassBackground(obj, controls::Panel::BackgroundProperty());
             if (obj.try_as<controls::Grid>()) {
                 SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
@@ -892,12 +901,13 @@ private:
             return;
         }
 
-        // 5e. Matching darker glass veil (12px blur + 44%) for Taskbar Jump Lists & Start Menu so text stays crisp over bright windows
+        // 5e. Unified 62% dark-smoke glass for Taskbar Jump Lists & Start Menu (locked against VisualState resets)
         if (name == L"JumpListRestyledAcrylic"
             || name == L"SystemItemsAcrylic"
             || name == L"JumpListAcrylic"
             || (name == L"AcrylicBorder" && GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr)) {
-            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj, 0.44f));
+            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
+            LockGlassBackground(obj, controls::Border::BackgroundProperty());
             SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
