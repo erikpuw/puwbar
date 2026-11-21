@@ -192,12 +192,30 @@ unsafe fn attach_tap(dll_path: &Path, ready_event: HANDLE) -> Result<(), String>
     ))
 }
 
+unsafe fn explorer_xaml_ready() -> bool {
+    let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
+    if tray.is_null() {
+        return false;
+    }
+    !FindWindowExW(
+        tray,
+        null_mut(),
+        wide("Windows.UI.Composition.DesktopWindowContentBridge").as_ptr(),
+        null(),
+    )
+    .is_null()
+}
+
 unsafe fn attach_tap_with_retry(
     dll_path: &Path,
     ready_event: HANDLE,
     max_wait: Duration,
 ) -> Result<(), String> {
     let deadline = std::time::Instant::now() + max_wait;
+    // Wait tightly for Explorer's XAML taskbar bridge before probing COM endpoints.
+    while !explorer_xaml_ready() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
     loop {
         match attach_tap(dll_path, ready_event) {
             Ok(()) => return Ok(()),
@@ -205,7 +223,7 @@ unsafe fn attach_tap_with_retry(
                 if std::time::Instant::now() >= deadline {
                     return Err(err);
                 }
-                std::thread::sleep(Duration::from_millis(400));
+                std::thread::sleep(Duration::from_millis(50));
             }
         }
     }
@@ -637,11 +655,10 @@ unsafe extern "system" fn host_wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         if !icon.is_null() {
             add_tray_icon(hwnd, icon);
         }
-        std::thread::sleep(Duration::from_millis(500));
         let dll = DLL_PATH.with(|p| p.borrow().clone());
         let ready = READY_HANDLE.with(|r| r.get()) as HANDLE;
         if let Some(dll) = dll {
-            let _ = attach_tap(&dll, ready);
+            let _ = attach_tap_with_retry(&dll, ready, Duration::from_secs(10));
         }
         return 0;
     }
@@ -689,8 +706,14 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
             ShowWindow(tray, SW_SHOWNA);
         }
 
+        // Boost priority during initial attach so PuwBar styles Explorer as soon as XAML initializes.
+        let proc = GetCurrentProcess();
+        SetPriorityClass(proc, ABOVE_NORMAL_PRIORITY_CLASS);
+        let attach_res = attach_tap_with_retry(&dll_path, ready_event, Duration::from_secs(30));
+        SetPriorityClass(proc, NORMAL_PRIORITY_CLASS);
+        attach_res?;
+
         refresh_autostart();
-        attach_tap_with_retry(&dll_path, ready_event, Duration::from_secs(30))?;
 
         let class = wide("PuwBar.Host");
         let instance = GetModuleHandleW(null());
