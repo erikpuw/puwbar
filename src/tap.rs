@@ -270,7 +270,7 @@ fn spawn_auxiliary_hosts_watcher(dll_path: PathBuf, stop_event: HANDLE) {
                     attached[i] = 0;
                 }
             }
-            if WaitForSingleObject(stop, 1500) == WAIT_OBJECT_0 {
+            if WaitForSingleObject(stop, 250) == WAIT_OBJECT_0 {
                 break;
             }
         }

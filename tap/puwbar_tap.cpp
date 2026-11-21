@@ -478,7 +478,7 @@ public:
                     AddRef();
                     if (dispatcher && !dispatcher.HasThreadAccess()) {
                         dispatcher.RunAsync(
-                            winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
+                            winrt::Windows::UI::Core::CoreDispatcherPriority::High,
                             [this, depObj, typeCopy, nameCopy, parentTypeCopy]() {
                                 ApplyStyleIfMatch(depObj, typeCopy, nameCopy, parentTypeCopy);
                                 Release();
