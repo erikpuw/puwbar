@@ -539,9 +539,17 @@ private:
             || name == L"SystemTrayFrameGrid"
             || name == L"OverflowFlyoutBackgroundBorder"
             || type == L"Windows.UI.Xaml.Controls.FlyoutPresenter"
+            || type == L"Windows.UI.Xaml.Controls.MenuFlyoutPresenter"
             || type == L"Windows.UI.Xaml.Controls.ToolTip"
             || name == L"NotificationCenterGrid"
             || name == L"CalendarCenterGrid"
+            || name == L"ControlCenterGrid"
+            || name == L"ControlCenterL1Grid"
+            || name == L"L1Grid"
+            || name == L"MediaTransportControlsRegion"
+            || name == L"JumpListRestyledAcrylic"
+            || name == L"SystemItemsAcrylic"
+            || name == L"JumpListAcrylic"
             || name == L"RunningIndicator"
             || (name == L"ExperienceToggleButtonRootPanel"
                 && parentType == L"Taskbar.AugmentedEntryPointButton");
@@ -831,7 +839,25 @@ private:
             return;
         }
 
-        // 5b. Matching glass background for taskbar & tray hover tooltips
+        // 5b. Lighten System Tray right-click MenuFlyoutPresenter's existing AcrylicBrush in-place (keeps native click hit-testing intact)
+        if (type == L"Windows.UI.Xaml.Controls.MenuFlyoutPresenter") {
+            try {
+                if (auto ctrl = obj.try_as<controls::Control>()) {
+                    if (auto ac = ctrl.Background().try_as<media::AcrylicBrush>()) {
+                        ac.TintColor(winrt::Windows::UI::Color{255, 24, 30, 44});
+                        ac.TintOpacity(0.18);
+                        ac.TintLuminosityOpacity(0.22);
+                    }
+                }
+            } catch (...) {
+            }
+            SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+            SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
+            SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            return;
+        }
+
+        // 5c. Matching glass background for taskbar & tray hover tooltips
         if (type == L"Windows.UI.Xaml.Controls.ToolTip") {
             SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj));
             SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{8.0, 8.0, 8.0, 8.0}));
@@ -840,8 +866,13 @@ private:
             return;
         }
 
-        // 5c. Matching glass background for Notification Center & Calendar (ShellExperienceHost.exe)
-        if (name == L"NotificationCenterGrid" || name == L"CalendarCenterGrid") {
+        // 5d. Matching glass background for Notification Center, Calendar (ShellExperienceHost) & Quick Settings (ShellHost)
+        if (name == L"NotificationCenterGrid"
+            || name == L"CalendarCenterGrid"
+            || name == L"ControlCenterGrid"
+            || name == L"ControlCenterL1Grid"
+            || name == L"L1Grid"
+            || name == L"MediaTransportControlsRegion") {
             SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
             if (obj.try_as<controls::Grid>()) {
                 SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
@@ -849,6 +880,18 @@ private:
                 SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
                 SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             }
+            return;
+        }
+
+        // 5e. Matching glass background for Taskbar app right-click Jump Lists (ShellExperienceHost.exe)
+        if (name == L"JumpListRestyledAcrylic"
+            || name == L"SystemItemsAcrylic"
+            || name == L"JumpListAcrylic") {
+            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
+            SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
+            SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+            SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
+            SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             return;
         }
 
@@ -1058,7 +1101,8 @@ private:
 
     void StartWatcher() {
         // Taskbar alignment/position registry watcher is only needed inside explorer.exe.
-        if (GetModuleHandleW(L"ShellExperienceHost.exe") != nullptr) {
+        if (GetModuleHandleW(L"ShellExperienceHost.exe") != nullptr
+            || GetModuleHandleW(L"ShellHost.exe") != nullptr) {
             return;
         }
         StopWatcher();

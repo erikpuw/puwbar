@@ -250,18 +250,21 @@ unsafe fn attach_tap(dll_path: &Path, ready_event: HANDLE) -> Result<(), String>
     attach_tap_pid(pid, dll_path, Some(ready_event))
 }
 
-fn spawn_shell_experience_watcher(dll_path: PathBuf, stop_event: HANDLE) {
+fn spawn_auxiliary_hosts_watcher(dll_path: PathBuf, stop_event: HANDLE) {
     let stop_raw = stop_event as usize;
     std::thread::spawn(move || unsafe {
         let stop = stop_raw as HANDLE;
-        let mut attached_pid = 0u32;
+        let hosts = ["ShellExperienceHost.exe", "ShellHost.exe"];
+        let mut attached = [0u32; 2];
         loop {
-            if let Some(pid) = find_process_pid("ShellExperienceHost.exe") {
-                if pid != attached_pid && attach_tap_pid(pid, &dll_path, None).is_ok() {
-                    attached_pid = pid;
+            for (i, &exe) in hosts.iter().enumerate() {
+                if let Some(pid) = find_process_pid(exe) {
+                    if pid != attached[i] && attach_tap_pid(pid, &dll_path, None).is_ok() {
+                        attached[i] = pid;
+                    }
+                } else {
+                    attached[i] = 0;
                 }
-            } else {
-                attached_pid = 0;
             }
             if WaitForSingleObject(stop, 1500) == WAIT_OBJECT_0 {
                 break;
@@ -792,7 +795,7 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
         attach_res?;
 
         refresh_autostart();
-        spawn_shell_experience_watcher(dll_path.clone(), stop_event);
+        spawn_auxiliary_hosts_watcher(dll_path.clone(), stop_event);
 
         let class = wide("PuwBar.Host");
         let instance = GetModuleHandleW(null());
