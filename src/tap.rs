@@ -1,7 +1,9 @@
 use crate::desktop::wide;
 use std::{
     mem::size_of,
+    os::windows::process::CommandExt,
     path::{Path, PathBuf},
+    process::Command,
     ptr::{null, null_mut},
     time::Duration,
 };
@@ -9,7 +11,12 @@ use windows_sys::{
     core::GUID,
     Win32::{
         Foundation::*,
-        System::{LibraryLoader::*, Registry::*, Threading::*},
+        System::{
+            Diagnostics::ToolHelp::*,
+            LibraryLoader::*,
+            Registry::*,
+            Threading::*,
+        },
         UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
     },
 };
@@ -115,6 +122,15 @@ type InitXamlDiagExFn = unsafe extern "system" fn(
 
 const EMBEDDED_TAP_DLL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/puwbar_tap.dll"));
 
+fn grant_appcontainer_read(path: &Path) {
+    // Allow UWP AppContainer hosts (ShellExperienceHost.exe) to load the staged TAP DLL.
+    let _ = Command::new("icacls.exe")
+        .arg(path)
+        .args(["/grant", "*S-1-15-2-1:(RX)", "/Q"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
 pub fn tap_dll_path() -> Result<PathBuf, String> {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for &b in EMBEDDED_TAP_DLL {
@@ -125,6 +141,7 @@ pub fn tap_dll_path() -> Result<PathBuf, String> {
     if !staged.exists() {
         std::fs::write(&staged, EMBEDDED_TAP_DLL)
             .map_err(|e| format!("Không ghi được DLL tạm {}: {e}", staged.display()))?;
+        grant_appcontainer_read(&staged);
     }
     staged
         .canonicalize()
@@ -133,6 +150,35 @@ pub fn tap_dll_path() -> Result<PathBuf, String> {
             PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s))
         })
         .map_err(|e| format!("Không chuẩn hóa được đường dẫn DLL: {e}"))
+}
+
+unsafe fn find_process_pid(target_exe: &str) -> Option<u32> {
+    let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if snap.is_null() || snap == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+    entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+    let mut found = None;
+    if Process32FirstW(snap, &mut entry) != 0 {
+        loop {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            if name.eq_ignore_ascii_case(target_exe) {
+                found = Some(entry.th32ProcessID);
+                break;
+            }
+            if Process32NextW(snap, &mut entry) == 0 {
+                break;
+            }
+        }
+    }
+    CloseHandle(snap);
+    found
 }
 
 unsafe fn explorer_pid() -> Result<u32, String> {
@@ -148,8 +194,11 @@ unsafe fn explorer_pid() -> Result<u32, String> {
     Ok(pid)
 }
 
-unsafe fn attach_tap(dll_path: &Path, ready_event: HANDLE) -> Result<(), String> {
-    let pid = explorer_pid()?;
+unsafe fn attach_tap_pid(
+    pid: u32,
+    dll_path: &Path,
+    ready_event: Option<HANDLE>,
+) -> Result<(), String> {
     let xaml = LoadLibraryExW(
         wide("Windows.UI.Xaml.dll").as_ptr(),
         null_mut(),
@@ -165,7 +214,9 @@ unsafe fn attach_tap(dll_path: &Path, ready_event: HANDLE) -> Result<(), String>
     };
     let init: InitXamlDiagExFn = std::mem::transmute(proc);
     let dll_w = wide(&dll_path.to_string_lossy());
-    ResetEvent(ready_event);
+    if let Some(ev) = ready_event {
+        ResetEvent(ev);
+    }
 
     let mut last_hr = -1i32;
     for idx in 1..=32 {
@@ -179,7 +230,9 @@ unsafe fn attach_tap(dll_path: &Path, ready_event: HANDLE) -> Result<(), String>
             null(),
         );
         if hr >= 0 {
-            WaitForSingleObject(ready_event, 2000);
+            if let Some(ev) = ready_event {
+                WaitForSingleObject(ev, 2000);
+            }
             FreeLibrary(xaml);
             return Ok(());
         }
@@ -187,9 +240,34 @@ unsafe fn attach_tap(dll_path: &Path, ready_event: HANDLE) -> Result<(), String>
     }
     FreeLibrary(xaml);
     Err(format!(
-        "Không gắn được PuwBar vào XAML Taskbar (HRESULT 0x{:08X}).",
+        "Không gắn được PuwBar vào XAML (PID {pid}, HRESULT 0x{:08X}).",
         last_hr as u32
     ))
+}
+
+unsafe fn attach_tap(dll_path: &Path, ready_event: HANDLE) -> Result<(), String> {
+    let pid = explorer_pid()?;
+    attach_tap_pid(pid, dll_path, Some(ready_event))
+}
+
+fn spawn_shell_experience_watcher(dll_path: PathBuf, stop_event: HANDLE) {
+    let stop_raw = stop_event as usize;
+    std::thread::spawn(move || unsafe {
+        let stop = stop_raw as HANDLE;
+        let mut attached_pid = 0u32;
+        loop {
+            if let Some(pid) = find_process_pid("ShellExperienceHost.exe") {
+                if pid != attached_pid && attach_tap_pid(pid, &dll_path, None).is_ok() {
+                    attached_pid = pid;
+                }
+            } else {
+                attached_pid = 0;
+            }
+            if WaitForSingleObject(stop, 1500) == WAIT_OBJECT_0 {
+                break;
+            }
+        }
+    });
 }
 
 unsafe fn explorer_xaml_ready() -> bool {
@@ -714,6 +792,7 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
         attach_res?;
 
         refresh_autostart();
+        spawn_shell_experience_watcher(dll_path.clone(), stop_event);
 
         let class = wide("PuwBar.Host");
         let instance = GetModuleHandleW(null());
