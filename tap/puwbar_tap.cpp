@@ -210,23 +210,15 @@ struct CompositeEffect : winrt::implements<CompositeEffect, ge::IGraphicsEffect,
 
 struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     comp::Compositor m_compositor{nullptr};
-    bool m_hostBackdrop = false;
 
-    PuwGlassBrush(comp::Compositor compositor, bool hostBackdrop)
-        : m_compositor(std::move(compositor)), m_hostBackdrop(hostBackdrop) {
-        FallbackColor(hostBackdrop
-            ? winrt::Windows::UI::Color{175, 18, 22, 32}
-            : winrt::Windows::UI::Color{90, 18, 22, 32});
+    explicit PuwGlassBrush(comp::Compositor compositor) : m_compositor(std::move(compositor)) {
+        FallbackColor(winrt::Windows::UI::Color{90, 18, 22, 32});
     }
 
     void OnConnected() {
         try {
             if (!CompositionBrush() && m_compositor) {
-                // Separate popup HWNDs (thumbnail preview, flyouts) need HostBackdrop to blur content behind the popup;
-                // elements inside Shell_TrayWnd use Backdrop.
-                comp::CompositionBrush backdrop = m_hostBackdrop
-                    ? static_cast<comp::CompositionBrush>(m_compositor.CreateHostBackdropBrush())
-                    : static_cast<comp::CompositionBrush>(m_compositor.CreateBackdropBrush());
+                auto backdrop = m_compositor.CreateBackdropBrush();
 
                 auto blur = winrt::make_self<GaussianBlurEffect>();
                 blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
@@ -255,21 +247,34 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     }
 };
 
-static media::Brush MakePuwGlass(xaml::DependencyObject const& obj, bool hostBackdrop = false) {
+static media::Brush MakePuwGlass(xaml::DependencyObject const& obj) {
     try {
         if (auto el = obj.try_as<xaml::UIElement>()) {
             auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
             if (visual) {
                 if (auto compositor = visual.Compositor()) {
-                    return winrt::make<PuwGlassBrush>(compositor, hostBackdrop);
+                    return winrt::make<PuwGlassBrush>(compositor);
                 }
             }
         }
     } catch (...) {
     }
-    return media::SolidColorBrush(hostBackdrop
-        ? winrt::Windows::UI::Color{175, 18, 22, 32}
-        : winrt::Windows::UI::Color{90, 18, 22, 32});
+    return media::SolidColorBrush(winrt::Windows::UI::Color{90, 18, 22, 32});
+}
+
+static media::Brush MakePuwFlyoutAcrylic() {
+    try {
+        media::AcrylicBrush acrylic;
+        acrylic.BackgroundSource(media::AcrylicBackgroundSource::HostBackdrop);
+        acrylic.TintColor(winrt::Windows::UI::Color{255, 16, 20, 32});
+        acrylic.TintOpacity(0.28);
+        acrylic.TintLuminosityOpacity(0.45);
+        acrylic.FallbackColor(winrt::Windows::UI::Color{204, 18, 22, 32});
+        acrylic.AlwaysUseFallback(false);
+        return acrylic;
+    } catch (...) {
+    }
+    return media::SolidColorBrush(winrt::Windows::UI::Color{204, 18, 22, 32});
 }
 
 static media::SolidColorBrush MakePuwBorder() {
@@ -526,6 +531,7 @@ private:
         std::wstring const& parentType) {
         return type == L"Taskbar.TaskbarFrame"
             || (name == L"RootGrid" && parentType == L"Taskbar.TaskbarFrame")
+            || name == L"TaskbarFrameRepeater"
             || type == L"Taskbar.TaskbarBackground"
             || name == L"BackgroundFill"
             || name == L"BackgroundStroke"
@@ -616,6 +622,13 @@ private:
             return;
         }
 
+        if (name == L"TaskbarFrameRepeater") {
+            if (!vertical) {
+                setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
+            }
+            return;
+        }
+
         if (name == L"SystemTrayFrameGrid") {
             xaml::Thickness margin = vertical
                 ? xaml::Thickness{2.0, 0.0, 2.0, 8.0}
@@ -697,6 +710,32 @@ private:
             return;
         }
 
+        // 3b. Remove Windows 11's extra Left-aligned margin on TaskbarFrameRepeater so Start hugs the pill symmetrically
+        if (name == L"TaskbarFrameRepeater") {
+            ApplyLayoutProps(obj, type, name, parentType, true);
+            try {
+                auto token = obj.RegisterPropertyChangedCallback(
+                    xaml::FrameworkElement::MarginProperty(),
+                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
+                        try {
+                            TaskbarEdge edge = GetTaskbarEdge();
+                            if (edge == TaskbarEdge::Bottom || edge == TaskbarEdge::Top) {
+                                auto cur = winrt::unbox_value_or<xaml::Thickness>(
+                                    sender.GetValue(dp), xaml::Thickness{0.0, 0.0, 0.0, 0.0});
+                                if (cur.Left != 0.0 || cur.Right != 0.0) {
+                                    sender.SetValue(dp, winrt::box_value(xaml::Thickness{0.0, cur.Top, 0.0, cur.Bottom}));
+                                }
+                            }
+                        } catch (...) {
+                        }
+                    });
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_propCallbacks.push_back({winrt::make_weak(obj), xaml::FrameworkElement::MarginProperty(), token});
+            } catch (...) {
+            }
+            return;
+        }
+
         // 4. Separate floating glass pill for the real Windows 11 System Tray
         if (name == L"SystemTrayFrameGrid") {
             SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
@@ -723,9 +762,9 @@ private:
             return;
         }
 
-        // 5. Matching glass background for tray overflow, thumbnail previews & taskbar '...' flyouts
+        // 5. Matching frosted glass (HostBackdrop AcrylicBrush) for tray overflow, thumbnail previews & taskbar '...' flyouts
         if (name == L"OverflowFlyoutBackgroundBorder") {
-            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj, true));
+            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwFlyoutAcrylic());
             SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
@@ -734,7 +773,7 @@ private:
         }
 
         if (type == L"Windows.UI.Xaml.Controls.FlyoutPresenter") {
-            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj, true));
+            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwFlyoutAcrylic());
             SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
@@ -905,6 +944,7 @@ private:
             for (auto& t : m_tracked) {
                 if (t.type == L"Taskbar.TaskbarFrame"
                     || (t.name == L"RootGrid" && t.parentType == L"Taskbar.TaskbarFrame")
+                    || t.name == L"TaskbarFrameRepeater"
                     || t.name == L"SystemTrayFrameGrid"
                     || t.name == L"RunningIndicator"
                     || (t.name == L"ExperienceToggleButtonRootPanel"
