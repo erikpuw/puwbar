@@ -267,14 +267,14 @@ static media::Brush MakePuwFlyoutAcrylic() {
         media::AcrylicBrush acrylic;
         acrylic.BackgroundSource(media::AcrylicBackgroundSource::HostBackdrop);
         acrylic.TintColor(winrt::Windows::UI::Color{255, 16, 20, 32});
-        acrylic.TintOpacity(0.28);
-        acrylic.TintLuminosityOpacity(0.45);
-        acrylic.FallbackColor(winrt::Windows::UI::Color{204, 18, 22, 32});
+        acrylic.TintOpacity(0.12);
+        acrylic.TintLuminosityOpacity(0.15);
+        acrylic.FallbackColor(winrt::Windows::UI::Color{160, 18, 22, 32});
         acrylic.AlwaysUseFallback(false);
         return acrylic;
     } catch (...) {
     }
-    return media::SolidColorBrush(winrt::Windows::UI::Color{204, 18, 22, 32});
+    return media::SolidColorBrush(winrt::Windows::UI::Color{160, 18, 22, 32});
 }
 
 static media::SolidColorBrush MakePuwBorder() {
@@ -645,7 +645,7 @@ private:
             if (!vertical) {
                 setProp(
                     xaml::FrameworkElement::MarginProperty(),
-                    winrt::box_value(startAligned ? xaml::Thickness{-2.0, 0.0, 0.0, 0.0} : xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
+                    winrt::box_value(startAligned ? xaml::Thickness{-7.0, 0.0, 0.0, 0.0} : xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
             } else {
                 setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
             }
@@ -759,16 +759,39 @@ private:
         // 3b. Trim left offset on Start button (LaunchListButton) when left-aligned so both pill ends match
         if (type == L"Taskbar.ExperienceToggleButton" && name == L"LaunchListButton") {
             ApplyLayoutProps(obj, type, name, parentType, true);
+            try {
+                auto token = obj.RegisterPropertyChangedCallback(
+                    xaml::FrameworkElement::MarginProperty(),
+                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
+                        try {
+                            TaskbarEdge edge = GetTaskbarEdge();
+                            if (edge == TaskbarEdge::Bottom || edge == TaskbarEdge::Top) {
+                                double wantLeft = IsTaskbarAlignedStart() ? -7.0 : 0.0;
+                                auto cur = winrt::unbox_value_or<xaml::Thickness>(
+                                    sender.GetValue(dp), xaml::Thickness{wantLeft, 0.0, 0.0, 0.0});
+                                if (cur.Left != wantLeft) {
+                                    sender.SetValue(dp, winrt::box_value(xaml::Thickness{wantLeft, cur.Top, cur.Right, cur.Bottom}));
+                                }
+                            }
+                        } catch (...) {
+                        }
+                    });
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_propCallbacks.push_back({winrt::make_weak(obj), xaml::FrameworkElement::MarginProperty(), token});
+            } catch (...) {
+            }
             return;
         }
 
-        // 3c. Match PuwBar corner radius & hairline border on thumbnail hover preview while preserving its native frosted glass
+        // 3c. Replace dark opaque thumbnail hover background with airy HostBackdrop Acrylic frosted glass matching PuwBar
         if (name == L"HoverFlyoutBackgroundControl") {
-            SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+            SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
             return;
         }
 
         if (name == L"HoverFlyoutBackground") {
+            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwFlyoutAcrylic());
+            SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
