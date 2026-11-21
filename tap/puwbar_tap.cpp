@@ -543,8 +543,7 @@ private:
             || type == L"Windows.UI.Xaml.Controls.ToolTip"
             || name == L"NotificationCenterGrid"
             || name == L"CalendarCenterGrid"
-            || name == L"ControlCenterGrid"
-            || name == L"RootGridBorder"
+            || name == L"ControlCenterRegion"
             || name == L"MediaTransportControlsRegion"
             || name == L"JumpListRestyledAcrylic"
             || name == L"SystemItemsAcrylic"
@@ -868,7 +867,7 @@ private:
         // 5d. Matching glass background for Notification Center, Calendar (ShellExperienceHost) & Quick Settings (ShellHost)
         if (name == L"NotificationCenterGrid"
             || name == L"CalendarCenterGrid"
-            || name == L"ControlCenterGrid"
+            || name == L"ControlCenterRegion"
             || name == L"MediaTransportControlsRegion") {
             SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
             if (obj.try_as<controls::Grid>()) {
@@ -880,9 +879,8 @@ private:
             return;
         }
 
-        // 5e. Matching glass background for Quick Settings outer card (ShellHost.exe) & Taskbar Jump Lists (ShellExperienceHost.exe)
-        if ((name == L"RootGridBorder" && GetModuleHandleW(L"ShellHost.exe") != nullptr)
-            || name == L"JumpListRestyledAcrylic"
+        // 5e. Matching glass background for Taskbar Jump Lists (ShellExperienceHost.exe)
+        if (name == L"JumpListRestyledAcrylic"
             || name == L"SystemItemsAcrylic"
             || name == L"JumpListAcrylic") {
             SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
