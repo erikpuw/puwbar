@@ -210,15 +210,23 @@ struct CompositeEffect : winrt::implements<CompositeEffect, ge::IGraphicsEffect,
 
 struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     comp::Compositor m_compositor{nullptr};
+    bool m_hostBackdrop = false;
 
-    explicit PuwGlassBrush(comp::Compositor compositor) : m_compositor(std::move(compositor)) {
-        FallbackColor(winrt::Windows::UI::Color{90, 18, 22, 32});
+    PuwGlassBrush(comp::Compositor compositor, bool hostBackdrop)
+        : m_compositor(std::move(compositor)), m_hostBackdrop(hostBackdrop) {
+        FallbackColor(hostBackdrop
+            ? winrt::Windows::UI::Color{175, 18, 22, 32}
+            : winrt::Windows::UI::Color{90, 18, 22, 32});
     }
 
     void OnConnected() {
         try {
             if (!CompositionBrush() && m_compositor) {
-                auto backdrop = m_compositor.CreateBackdropBrush();
+                // Separate popup HWNDs (thumbnail preview, flyouts) need HostBackdrop to blur content behind the popup;
+                // elements inside Shell_TrayWnd use Backdrop.
+                comp::CompositionBrush backdrop = m_hostBackdrop
+                    ? static_cast<comp::CompositionBrush>(m_compositor.CreateHostBackdropBrush())
+                    : static_cast<comp::CompositionBrush>(m_compositor.CreateBackdropBrush());
 
                 auto blur = winrt::make_self<GaussianBlurEffect>();
                 blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
@@ -247,19 +255,21 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     }
 };
 
-static media::Brush MakePuwGlass(xaml::DependencyObject const& obj) {
+static media::Brush MakePuwGlass(xaml::DependencyObject const& obj, bool hostBackdrop = false) {
     try {
         if (auto el = obj.try_as<xaml::UIElement>()) {
             auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
             if (visual) {
                 if (auto compositor = visual.Compositor()) {
-                    return winrt::make<PuwGlassBrush>(compositor);
+                    return winrt::make<PuwGlassBrush>(compositor, hostBackdrop);
                 }
             }
         }
     } catch (...) {
     }
-    return media::SolidColorBrush(winrt::Windows::UI::Color{90, 18, 22, 32});
+    return media::SolidColorBrush(hostBackdrop
+        ? winrt::Windows::UI::Color{175, 18, 22, 32}
+        : winrt::Windows::UI::Color{90, 18, 22, 32});
 }
 
 static media::SolidColorBrush MakePuwBorder() {
@@ -713,9 +723,9 @@ private:
             return;
         }
 
-        // 5. Matching glass background for tray overflow & taskbar '...' app overflow flyouts
+        // 5. Matching glass background for tray overflow, thumbnail previews & taskbar '...' flyouts
         if (name == L"OverflowFlyoutBackgroundBorder") {
-            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
+            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj, true));
             SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
@@ -724,11 +734,10 @@ private:
         }
 
         if (type == L"Windows.UI.Xaml.Controls.FlyoutPresenter") {
-            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj));
+            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj, true));
             SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
-            SaveAndSet(obj, controls::Control::PaddingProperty(), winrt::box_value(xaml::Thickness{2.0, 4.0, 2.0, 4.0}));
             return;
         }
 
