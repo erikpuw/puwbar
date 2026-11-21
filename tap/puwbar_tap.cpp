@@ -451,6 +451,7 @@ public:
             if (element.Name) meta.name = element.Name;
 
             std::wstring parentType;
+            bool inTaskbarBackground = false;
             IXamlDiagnostics* diag = nullptr;
             {
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -459,6 +460,7 @@ public:
                 if (it != m_meta.end()) {
                     parentType = it->second.type;
                 }
+                inTaskbarBackground = HasAncestorTypeLocked(relation.Parent, L"Taskbar.TaskbarBackground");
                 diag = m_diag;
                 if (diag) diag->AddRef();
             }
@@ -473,20 +475,21 @@ public:
             winrt::Windows::Foundation::IInspectable insp{raw, winrt::take_ownership_from_abi};
             if (auto depObj = insp.try_as<xaml::DependencyObject>()) {
                 CaptureDispatcher(depObj);
-                if (IsInteresting(meta.type, meta.name, parentType)) {
+                std::wstring effectiveParent = inTaskbarBackground ? L"Taskbar.TaskbarBackground" : parentType;
+                if (IsInteresting(meta.type, meta.name, effectiveParent)) {
                     {
                         std::lock_guard<std::recursive_mutex> lock(m_mutex);
                         m_tracked.push_back(TrackedElement{
                             winrt::make_weak(depObj),
                             meta.type,
                             meta.name,
-                            parentType,
+                            effectiveParent,
                         });
                     }
                     auto dispatcher = depObj.Dispatcher();
                     auto typeCopy = meta.type;
                     auto nameCopy = meta.name;
-                    auto parentTypeCopy = parentType;
+                    auto parentTypeCopy = effectiveParent;
                     AddRef();
                     if (dispatcher && !dispatcher.HasThreadAccess()) {
                         dispatcher.RunAsync(
@@ -525,16 +528,28 @@ private:
         }
     }
 
+    bool HasAncestorTypeLocked(InstanceHandle h, std::wstring const& targetType) const {
+        InstanceHandle cur = h;
+        for (int depth = 0; depth < 16 && cur != 0; ++depth) {
+            auto it = m_meta.find(cur);
+            if (it == m_meta.end()) break;
+            if (it->second.type == targetType) return true;
+            cur = it->second.parent;
+        }
+        return false;
+    }
+
     static bool IsInteresting(
         std::wstring const& type,
         std::wstring const& name,
         std::wstring const& parentType) {
         return type == L"Taskbar.TaskbarFrame"
             || (name == L"RootGrid" && parentType == L"Taskbar.TaskbarFrame")
+            || type == L"Taskbar.TaskbarFrameRepeater"
             || name == L"TaskbarFrameRepeater"
             || type == L"Taskbar.TaskbarBackground"
-            || name == L"BackgroundFill"
-            || name == L"BackgroundStroke"
+            || ((name == L"BackgroundFill" || name == L"BackgroundStroke")
+                && parentType == L"Taskbar.TaskbarBackground")
             || name == L"SystemTrayFrameGrid"
             || name == L"OverflowFlyoutBackgroundBorder"
             || type == L"Windows.UI.Xaml.Controls.FlyoutPresenter"
@@ -601,6 +616,7 @@ private:
                     xaml::FrameworkElement::HorizontalAlignmentProperty(),
                     winrt::box_value(startAligned ? xaml::HorizontalAlignment::Left : xaml::HorizontalAlignment::Center));
                 setProp(xaml::FrameworkElement::VerticalAlignmentProperty(), winrt::box_value(xaml::VerticalAlignment::Stretch));
+                setProp(controls::Control::PaddingProperty(), winrt::box_value(xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
                 setProp(
                     xaml::FrameworkElement::MarginProperty(),
                     winrt::box_value(startAligned ? xaml::Thickness{8.0, 0.0, 250.0, 0.0} : xaml::Thickness{250.0, 0.0, 250.0, 0.0}));
@@ -622,7 +638,7 @@ private:
             return;
         }
 
-        if (name == L"TaskbarFrameRepeater") {
+        if (type == L"Taskbar.TaskbarFrameRepeater" || name == L"TaskbarFrameRepeater") {
             if (!vertical) {
                 setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
             }
@@ -698,20 +714,42 @@ private:
             SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             ApplyLayoutProps(obj, type, name, parentType, true);
+            try {
+                auto token = obj.RegisterPropertyChangedCallback(
+                    controls::Grid::PaddingProperty(),
+                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
+                        try {
+                            TaskbarEdge edge = GetTaskbarEdge();
+                            if (edge == TaskbarEdge::Bottom || edge == TaskbarEdge::Top) {
+                                auto cur = winrt::unbox_value_or<xaml::Thickness>(
+                                    sender.GetValue(dp), xaml::Thickness{3.0, 0.0, 3.0, 0.0});
+                                if (cur.Left != 3.0 || cur.Right != 3.0) {
+                                    sender.SetValue(dp, winrt::box_value(xaml::Thickness{3.0, cur.Top, 3.0, cur.Bottom}));
+                                }
+                            }
+                        } catch (...) {
+                        }
+                    });
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_propCallbacks.push_back({winrt::make_weak(obj), controls::Grid::PaddingProperty(), token});
+            } catch (...) {
+            }
             if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
                 try { fe.UpdateLayout(); } catch (...) {}
             }
             return;
         }
 
-        // 3. Hide native full-width taskbar background & stroke
-        if (type == L"Taskbar.TaskbarBackground" || name == L"BackgroundFill" || name == L"BackgroundStroke") {
+        // 3. Hide native full-width taskbar background & stroke (ONLY inside Taskbar.TaskbarBackground — never touch thumbnail preview BackgroundFill!)
+        if (type == L"Taskbar.TaskbarBackground"
+            || ((name == L"BackgroundFill" || name == L"BackgroundStroke")
+                && parentType == L"Taskbar.TaskbarBackground")) {
             SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
             return;
         }
 
         // 3b. Remove Windows 11's extra Left-aligned margin on TaskbarFrameRepeater so Start hugs the pill symmetrically
-        if (name == L"TaskbarFrameRepeater") {
+        if (type == L"Taskbar.TaskbarFrameRepeater" || name == L"TaskbarFrameRepeater") {
             ApplyLayoutProps(obj, type, name, parentType, true);
             try {
                 auto token = obj.RegisterPropertyChangedCallback(
@@ -944,6 +982,7 @@ private:
             for (auto& t : m_tracked) {
                 if (t.type == L"Taskbar.TaskbarFrame"
                     || (t.name == L"RootGrid" && t.parentType == L"Taskbar.TaskbarFrame")
+                    || t.type == L"Taskbar.TaskbarFrameRepeater"
                     || t.name == L"TaskbarFrameRepeater"
                     || t.name == L"SystemTrayFrameGrid"
                     || t.name == L"RunningIndicator"
