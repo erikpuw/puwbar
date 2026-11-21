@@ -78,7 +78,7 @@ struct SavedPropCallback {
 struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
     winrt::hstring m_name{L"Blur"};
     ge::IGraphicsEffectSource m_source{nullptr};
-    float m_blur = 12.0f;
+    float m_blur = 18.0f;
 
     winrt::hstring Name() const { return m_name; }
     void Name(winrt::hstring const& v) { m_name = v; }
@@ -125,10 +125,63 @@ struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, ge::IGraphicsE
     }
 };
 
+// Single-pass GPU ColorMatrix combining brightness(0.76) + saturate(1.75) so white text stays crisp over bright wallpapers.
+struct GlassToneEffect : winrt::implements<GlassToneEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
+    winrt::hstring m_name{L"Tone"};
+    ge::IGraphicsEffectSource m_source{nullptr};
+
+    winrt::hstring Name() const { return m_name; }
+    void Name(winrt::hstring const& v) { m_name = v; }
+
+    HRESULT STDMETHODCALLTYPE GetEffectId(GUID* id) noexcept override {
+        if (!id) return E_POINTER;
+        *id = CLSID_D2D1ColorMatrix;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetNamedPropertyMapping(LPCWSTR, UINT*, ge_interop::GRAPHICS_EFFECT_PROPERTY_MAPPING*) noexcept override {
+        return E_INVALIDARG;
+    }
+    HRESULT STDMETHODCALLTYPE GetPropertyCount(UINT* count) noexcept override {
+        if (!count) return E_POINTER;
+        *count = 1;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetProperty(UINT index, ABI::Windows::Foundation::IPropertyValue** value) noexcept override {
+        if (!value || index != D2D1_COLORMATRIX_PROP_COLOR_MATRIX) return E_INVALIDARG;
+        try {
+            constexpr float b = 0.76f;
+            constexpr float s = 1.75f;
+            constexpr float sr = 0.2126f * (1.0f - s);
+            constexpr float sg = 0.7152f * (1.0f - s);
+            constexpr float sb = 0.0722f * (1.0f - s);
+            float m[20] = {
+                b * (sr + s), b * sr,       b * sr,       0.0f,
+                b * sg,       b * (sg + s), b * sg,       0.0f,
+                b * sb,       b * sb,       b * (sb + s), 0.0f,
+                0.0f,         0.0f,         0.0f,         1.0f,
+                0.0f,         0.0f,         0.0f,         0.0f,
+            };
+            auto boxed = winrt::Windows::Foundation::PropertyValue::CreateSingleArray(m);
+            return winrt::get_unknown(boxed)->QueryInterface(IID_PPV_ARGS(value));
+        } catch (...) {
+            return E_FAIL;
+        }
+    }
+    HRESULT STDMETHODCALLTYPE GetSource(UINT index, ge_interop::IGraphicsEffectSource** source) noexcept override {
+        if (!source || index != 0 || !m_source) return E_INVALIDARG;
+        return winrt::get_unknown(m_source)->QueryInterface(IID_PPV_ARGS(source));
+    }
+    HRESULT STDMETHODCALLTYPE GetSourceCount(UINT* count) noexcept override {
+        if (!count) return E_POINTER;
+        *count = 1;
+        return S_OK;
+    }
+};
+
 struct ColorTintEffect : winrt::implements<ColorTintEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
     winrt::hstring m_name{L"Tint"};
-    // Premultiplied RGBA for airy 24% translucent dark-smoke frosted glass
-    float m_color[4] = {0.02f, 0.025f, 0.04f, 0.24f};
+    // Premultiplied RGBA for glass3d deep ocean-smoke tint hsl(189 80% 10% / 0.28)
+    float m_color[4] = {0.006f, 0.024f, 0.032f, 0.28f};
 
     winrt::hstring Name() const { return m_name; }
     void Name(winrt::hstring const& v) { m_name = v; }
@@ -222,9 +275,11 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
 
                 auto blur = winrt::make_self<GaussianBlurEffect>();
                 blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
+                auto tone = winrt::make_self<GlassToneEffect>();
+                tone->m_source = blur.as<ge::IGraphicsEffectSource>();
                 auto tint = winrt::make_self<ColorTintEffect>();
                 auto composite = winrt::make_self<CompositeEffect>();
-                composite->m_src0 = blur.as<ge::IGraphicsEffectSource>();
+                composite->m_src0 = tone.as<ge::IGraphicsEffectSource>();
                 composite->m_src1 = tint.as<ge::IGraphicsEffectSource>();
 
                 auto factory = m_compositor.CreateEffectFactory(composite.as<ge::IGraphicsEffect>());
