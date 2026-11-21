@@ -524,6 +524,31 @@ private:
         return false;
     }
 
+    static bool IsAuxiliaryGlassTarget(
+        std::wstring const& name,
+        std::wstring const& parentType) {
+        if (name == L"NotificationCenterGrid"
+            || name == L"CalendarCenterGrid"
+            || name == L"ControlCenterGrid"
+            || name == L"ControlCenterL1Grid"
+            || name == L"ControlCenterL2Grid"
+            || name == L"L1Grid"
+            || name == L"L2Grid"
+            || name == L"MediaTransportControlsRegion"
+            || name == L"JumpListGrid"
+            || name == L"JumpListRootGrid"
+            || name == L"JumpListBorder") {
+            return true;
+        }
+        if (name == L"RootGrid" || name == L"BackgroundBorder") {
+            return parentType.find(L"ControlCenter") != std::wstring::npos
+                || parentType.find(L"QuickSettings") != std::wstring::npos
+                || parentType.find(L"JumpList") != std::wstring::npos
+                || parentType.find(L"JumpView") != std::wstring::npos;
+        }
+        return false;
+    }
+
     static bool IsInteresting(
         std::wstring const& type,
         std::wstring const& name,
@@ -540,6 +565,8 @@ private:
             || name == L"OverflowFlyoutBackgroundBorder"
             || type == L"Windows.UI.Xaml.Controls.FlyoutPresenter"
             || type == L"Windows.UI.Xaml.Controls.MenuFlyoutPresenter"
+            || type == L"Windows.UI.Xaml.Controls.ToolTip"
+            || IsAuxiliaryGlassTarget(name, parentType)
             || name == L"RunningIndicator"
             || (name == L"ExperienceToggleButtonRootPanel"
                 && parentType == L"Taskbar.AugmentedEntryPointButton");
@@ -838,6 +865,33 @@ private:
             return;
         }
 
+        // 5c. Matching glass background for taskbar & tray hover tooltips
+        if (type == L"Windows.UI.Xaml.Controls.ToolTip") {
+            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj));
+            SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{8.0, 8.0, 8.0, 8.0}));
+            SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
+            SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            return;
+        }
+
+        // 5d. Matching glass background for Quick Settings, Notification Center, Calendar & Taskbar Jump Lists
+        if (IsAuxiliaryGlassTarget(name, parentType)) {
+            if (obj.try_as<controls::Border>()) {
+                SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
+                SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
+                SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+                SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
+                SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            } else if (obj.try_as<controls::Grid>()) {
+                SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
+                SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
+                SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
+                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            }
+            return;
+        }
+
         if (name == L"RunningIndicator") {
             ApplyLayoutProps(obj, type, name, parentType, true);
             // Keep right-edge indicator locked on Right even when VisualStateManager updates active app state.
@@ -1043,6 +1097,11 @@ private:
     }
 
     void StartWatcher() {
+        // Taskbar alignment/position registry watcher is only needed inside explorer.exe.
+        if (GetModuleHandleW(L"ShellExperienceHost.exe") != nullptr
+            || GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr) {
+            return;
+        }
         StopWatcher();
         m_stopWatcher.store(false);
         AddRef();

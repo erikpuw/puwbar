@@ -23,7 +23,7 @@
 | **Native behavior intact** | Never hides or replaces Explorer. Keeps live tray animations (RunCat 365, UniKey), native right-click menus, the overflow icon grid, Start menu, and window previews. |
 | **All 4 edges & Left/Center** | Adapts live when switching taskbar position (**Bottom / Top / Left / Right**) or alignment (**Left / Center**) in Windows Settings. |
 | **Right-edge indicator fix** | Keeps the running-app indicator locked to the right edge on vertical right-docked taskbars. |
-| **Matching glass everywhere** | Styles the System Tray pill, tray right-click menus, window thumbnail previews, overflow flyouts (`^`, `...`), and Widgets button (shown automatically when Widgets is enabled in Windows). |
+| **Matching glass everywhere** | Styles the System Tray pill, tray right-click menus, taskbar Jump Lists, tooltips, window thumbnail previews, Quick Settings, Notification Center, Calendar, overflow flyouts (`^`, `...`), and Widgets button. |
 | **Smooth horizontal slide** | 300ms ease-in-out slide timed with Windows 11's app launch animation, VSync-locked to the monitor refresh rate. |
 | **Light & single file** | About 1.2 MB of RAM and 0% CPU at idle. The TAP DLL and icon are embedded inside `puwbar.exe`; exiting restores every XAML property cleanly. |
 | **Tray menu** | Start with Windows, Reapply taskbar glass, Language (Vietnamese / English), About, Exit (`Ctrl+Alt+F12`). |
