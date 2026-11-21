@@ -78,7 +78,7 @@ struct SavedPropCallback {
 struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
     winrt::hstring m_name{L"Blur"};
     ge::IGraphicsEffectSource m_source{nullptr};
-    float m_blur = 18.0f;
+    float m_blur = 12.0f;
 
     winrt::hstring Name() const { return m_name; }
     void Name(winrt::hstring const& v) { m_name = v; }
@@ -127,8 +127,8 @@ struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, ge::IGraphicsE
 
 struct ColorTintEffect : winrt::implements<ColorTintEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
     winrt::hstring m_name{L"Tint"};
-    // Premultiplied RGBA for 42% deep ocean-smoke frosted glass (matches brightness(0.76) + 24% tint over bright wallpapers)
-    float m_color[4] = {0.010f, 0.024f, 0.036f, 0.42f};
+    // Premultiplied RGBA for airy 24% translucent dark-smoke frosted glass
+    float m_color[4] = {0.02f, 0.025f, 0.04f, 0.24f};
 
     winrt::hstring Name() const { return m_name; }
     void Name(winrt::hstring const& v) { m_name = v; }
@@ -478,7 +478,7 @@ public:
                     AddRef();
                     if (dispatcher && !dispatcher.HasThreadAccess()) {
                         dispatcher.RunAsync(
-                            winrt::Windows::UI::Core::CoreDispatcherPriority::High,
+                            winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
                             [this, depObj, typeCopy, nameCopy, parentTypeCopy]() {
                                 ApplyStyleIfMatch(depObj, typeCopy, nameCopy, parentTypeCopy);
                                 Release();
