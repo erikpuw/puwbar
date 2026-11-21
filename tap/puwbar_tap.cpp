@@ -548,6 +548,8 @@ private:
             || name == L"JumpListRestyledAcrylic"
             || name == L"SystemItemsAcrylic"
             || name == L"JumpListAcrylic"
+            || name == L"AcrylicBorder"
+            || name == L"AcrylicOverlay"
             || name == L"RunningIndicator"
             || (name == L"ExperienceToggleButtonRootPanel"
                 && parentType == L"Taskbar.AugmentedEntryPointButton");
@@ -879,15 +881,21 @@ private:
             return;
         }
 
-        // 5e. Matching glass background for Taskbar Jump Lists (ShellExperienceHost.exe)
+        // 5e. Matching glass background for Taskbar Jump Lists (ShellExperienceHost) & Start Menu (StartMenuExperienceHost)
         if (name == L"JumpListRestyledAcrylic"
             || name == L"SystemItemsAcrylic"
-            || name == L"JumpListAcrylic") {
+            || name == L"JumpListAcrylic"
+            || (name == L"AcrylicBorder" && GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr)) {
             SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
             SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            return;
+        }
+
+        if (name == L"AcrylicOverlay" && GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr) {
+            SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
             return;
         }
 
@@ -1098,7 +1106,8 @@ private:
     void StartWatcher() {
         // Taskbar alignment/position registry watcher is only needed inside explorer.exe.
         if (GetModuleHandleW(L"ShellExperienceHost.exe") != nullptr
-            || GetModuleHandleW(L"ShellHost.exe") != nullptr) {
+            || GetModuleHandleW(L"ShellHost.exe") != nullptr
+            || GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr) {
             return;
         }
         StopWatcher();

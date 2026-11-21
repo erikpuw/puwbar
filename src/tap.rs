@@ -254,8 +254,12 @@ fn spawn_auxiliary_hosts_watcher(dll_path: PathBuf, stop_event: HANDLE) {
     let stop_raw = stop_event as usize;
     std::thread::spawn(move || unsafe {
         let stop = stop_raw as HANDLE;
-        let hosts = ["ShellExperienceHost.exe", "ShellHost.exe"];
-        let mut attached = [0u32; 2];
+        let hosts = [
+            "ShellExperienceHost.exe",
+            "ShellHost.exe",
+            "StartMenuExperienceHost.exe",
+        ];
+        let mut attached = [0u32; 3];
         loop {
             for (i, &exe) in hosts.iter().enumerate() {
                 if let Some(pid) = find_process_pid(exe) {
