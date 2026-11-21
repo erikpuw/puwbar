@@ -11,7 +11,7 @@
   Viết bằng Rust + C++/WinRT, một file exe ~870 KB duy nhất, không cần Windhawk, không cần cài Visual C++ Redistributable.
 </p>
 
-<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puwbar/releases">Bản mới nhất: v1.0.2</a></p>
+<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puwbar/releases">Bản mới nhất: v1.0.3</a></p>
 
 > **Chỉ tải từ nguồn của tác giả.** PuwBar do tác giả (erikpuw) phát hành duy nhất tại [github.com/erikpuw/puwbar](https://github.com/erikpuw/puwbar). Bản tải từ nơi khác (trang chia sẻ, kho khác, bản đóng gói lại, tệp gửi qua mạng) không do tác giả kiểm soát và không được đảm bảo: có thể đã bị sửa đổi hoặc chèn thêm mã. Hãy chỉ dùng bản ở mục [Releases](https://github.com/erikpuw/puwbar/releases) của kho này.
 
