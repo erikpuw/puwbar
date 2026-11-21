@@ -23,6 +23,7 @@
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.UI.Xaml.Shapes.h>
 
 #include <atomic>
 #include <chrono>
@@ -36,6 +37,7 @@
 namespace xaml = winrt::Windows::UI::Xaml;
 namespace controls = winrt::Windows::UI::Xaml::Controls;
 namespace media = winrt::Windows::UI::Xaml::Media;
+namespace shapes = winrt::Windows::UI::Xaml::Shapes;
 namespace comp = winrt::Windows::UI::Composition;
 namespace ge = winrt::Windows::Graphics::Effects;
 namespace ge_interop = ABI::Windows::Graphics::Effects;
@@ -266,15 +268,15 @@ static media::Brush MakePuwFlyoutAcrylic() {
     try {
         media::AcrylicBrush acrylic;
         acrylic.BackgroundSource(media::AcrylicBackgroundSource::HostBackdrop);
-        acrylic.TintColor(winrt::Windows::UI::Color{255, 16, 20, 32});
-        acrylic.TintOpacity(0.12);
-        acrylic.TintLuminosityOpacity(0.15);
-        acrylic.FallbackColor(winrt::Windows::UI::Color{160, 18, 22, 32});
+        acrylic.TintColor(winrt::Windows::UI::Color{255, 40, 48, 64});
+        acrylic.TintOpacity(0.16);
+        acrylic.TintLuminosityOpacity(0.22);
+        acrylic.FallbackColor(winrt::Windows::UI::Color{140, 36, 44, 58});
         acrylic.AlwaysUseFallback(false);
         return acrylic;
     } catch (...) {
     }
-    return media::SolidColorBrush(winrt::Windows::UI::Color{160, 18, 22, 32});
+    return media::SolidColorBrush(winrt::Windows::UI::Color{140, 36, 44, 58});
 }
 
 static media::SolidColorBrush MakePuwBorder() {
@@ -452,6 +454,7 @@ public:
 
             std::wstring parentType;
             bool inMainTaskbarBackground = false;
+            bool inHoverFlyoutBackground = false;
             IXamlDiagnostics* diag = nullptr;
             {
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -461,6 +464,7 @@ public:
                     parentType = it->second.type;
                 }
                 inMainTaskbarBackground = HasAncestorNameLocked(relation.Parent, L"BackgroundControl");
+                inHoverFlyoutBackground = HasAncestorNameLocked(relation.Parent, L"HoverFlyoutBackgroundControl");
                 diag = m_diag;
                 if (diag) diag->AddRef();
             }
@@ -475,7 +479,9 @@ public:
             winrt::Windows::Foundation::IInspectable insp{raw, winrt::take_ownership_from_abi};
             if (auto depObj = insp.try_as<xaml::DependencyObject>()) {
                 CaptureDispatcher(depObj);
-                std::wstring effectiveParent = inMainTaskbarBackground ? L"Taskbar.BackgroundControl" : parentType;
+                std::wstring effectiveParent = inMainTaskbarBackground
+                    ? L"Taskbar.BackgroundControl"
+                    : (inHoverFlyoutBackground ? L"Taskbar.HoverFlyoutBackgroundControl" : parentType);
                 if (IsInteresting(meta.type, meta.name, effectiveParent)) {
                     {
                         std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -548,7 +554,8 @@ private:
             || (type == L"Taskbar.ExperienceToggleButton" && name == L"LaunchListButton")
             || (type == L"Taskbar.TaskbarBackground" && name == L"BackgroundControl")
             || ((name == L"BackgroundFill" || name == L"BackgroundStroke")
-                && parentType == L"Taskbar.BackgroundControl")
+                && (parentType == L"Taskbar.BackgroundControl"
+                    || parentType == L"Taskbar.HoverFlyoutBackgroundControl"))
             || name == L"HoverFlyoutBackgroundControl"
             || name == L"HoverFlyoutBackground"
             || name == L"SystemTrayFrameGrid"
@@ -783,15 +790,23 @@ private:
             return;
         }
 
-        // 3c. Replace dark opaque thumbnail hover background with airy HostBackdrop Acrylic frosted glass matching PuwBar
+        // 3c. Apply the exact same PuwBar frosted glass brush (MakePuwGlass) to thumbnail hover preview's BackgroundFill
         if (name == L"HoverFlyoutBackgroundControl") {
+            SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+            return;
+        }
+
+        if (name == L"BackgroundFill" && parentType == L"Taskbar.HoverFlyoutBackgroundControl") {
+            SaveAndSet(obj, shapes::Shape::FillProperty(), MakePuwGlass(obj));
+            return;
+        }
+
+        if (name == L"BackgroundStroke" && parentType == L"Taskbar.HoverFlyoutBackgroundControl") {
             SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
             return;
         }
 
         if (name == L"HoverFlyoutBackground") {
-            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwFlyoutAcrylic());
-            SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
