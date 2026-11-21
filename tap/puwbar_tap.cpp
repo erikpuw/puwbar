@@ -540,10 +540,6 @@ private:
             || name == L"OverflowFlyoutBackgroundBorder"
             || type == L"Windows.UI.Xaml.Controls.FlyoutPresenter"
             || type == L"Windows.UI.Xaml.Controls.MenuFlyoutPresenter"
-            || name == L"NotificationCenterGrid"
-            || name == L"CalendarCenterGrid"
-            || name == L"ControlCenterGrid"
-            || name == L"MediaTransportControlsRegion"
             || name == L"RunningIndicator"
             || (name == L"ExperienceToggleButtonRootPanel"
                 && parentType == L"Taskbar.AugmentedEntryPointButton");
@@ -842,21 +838,6 @@ private:
             return;
         }
 
-        // 5c. Matching glass background for Quick Settings, Notification Center & Calendar (ShellExperienceHost.exe)
-        if (name == L"NotificationCenterGrid"
-            || name == L"CalendarCenterGrid"
-            || name == L"ControlCenterGrid"
-            || name == L"MediaTransportControlsRegion") {
-            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
-            if (obj.try_as<controls::Grid>()) {
-                SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
-                SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
-                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
-            }
-            return;
-        }
-
         if (name == L"RunningIndicator") {
             ApplyLayoutProps(obj, type, name, parentType, true);
             // Keep right-edge indicator locked on Right even when VisualStateManager updates active app state.
@@ -1062,10 +1043,6 @@ private:
     }
 
     void StartWatcher() {
-        // Taskbar alignment/position registry watcher is only needed inside explorer.exe.
-        if (GetModuleHandleW(L"ShellExperienceHost.exe") != nullptr) {
-            return;
-        }
         StopWatcher();
         m_stopWatcher.store(false);
         AddRef();
