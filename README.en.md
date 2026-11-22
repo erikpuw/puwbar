@@ -8,7 +8,7 @@
 
 <p align="center">
   Splits the native taskbar into separate rounded glass pills for apps, the System Tray, and Widgets.<br>
-  Written in Rust + C++/WinRT, single ~870 KB exe, no Windhawk, no Visual C++ Redistributable to install.
+  Written in Rust + C++/WinRT, ships with a native Windows installer, no Windhawk, no Visual C++ Redistributable required.
 </p>
 
 <p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puwbar/releases">Latest: v1.0.6</a></p>
@@ -25,7 +25,7 @@
 | **Right-edge indicator fix** | Keeps the running-app indicator locked to the right edge on vertical right-docked taskbars. |
 | **Matching glass everywhere** | Styles the System Tray pill, Start Menu, tray right-click menus, taskbar Jump Lists, hover tooltips, window thumbnail previews, Quick Settings, Notification Center, Calendar, overflow flyouts (`^`, `...`), and Widgets button. |
 | **Smooth horizontal slide** | 300ms ease-in-out slide timed with Windows 11's app launch animation, VSync-locked to the monitor refresh rate. |
-| **Light & single file** | About 1.2 MB of RAM and 0% CPU at idle. The TAP DLL and icon are embedded inside `puwbar.exe`; exiting restores every XAML property cleanly. |
+| **Lightweight & clean** | About 1.2 MB of RAM and 0% CPU at idle. Installs per-user with a standard entry in Windows Installed apps; exiting restores every XAML property cleanly. |
 | **Tray menu** | Start with Windows, Glass contrast (24% / 45% / 62%), Glass surfaces (toggle each panel back to native Windows), Reapply taskbar glass, Language (Vietnamese / English), About, Exit (`Ctrl+Alt+F12`). |
 
 **Start with Windows** asks for administrator permission once to create an immediate-logon Task Scheduler task (no startup delay, retries up to 30 seconds while Explorer XAML initializes). If UAC is declined, it falls back to `HKCU\...\Run`. Untick it to turn it off.
