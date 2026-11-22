@@ -619,7 +619,6 @@ private:
             || name == L"SystemItemsAcrylic"
             || name == L"JumpListAcrylic"
             || name == L"AcrylicBorder"
-            || name == L"AcrylicOverlay"
             || name == L"RunningIndicator"
             || (name == L"ExperienceToggleButtonRootPanel"
                 && parentType == L"Taskbar.AugmentedEntryPointButton");
@@ -1010,13 +1009,6 @@ private:
                 SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
                 SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
                 SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
-            }
-            return;
-        }
-
-        if (name == L"AcrylicOverlay" && GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr) {
-            if ((ReadGlassConfig().surfaces & SURF_START_MENU) != 0) {
-                SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
             }
             return;
         }
