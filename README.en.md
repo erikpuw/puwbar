@@ -30,6 +30,14 @@
 
 **Start with Windows** asks for administrator permission once to create an immediate-logon Task Scheduler task (no startup delay, retries up to 30 seconds while Explorer XAML initializes). If UAC is declined, it falls back to `HKCU\...\Run`. Untick it to turn it off.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Start Menu and Taskbar glass](assets/screenshots/start-menu.jpg)<br>**Start Menu & Taskbar**: 12px rounded frosted glass with subtle hairline border | ![Control Center and System Tray](assets/screenshots/control-center.jpg)<br>**Control Center & System Tray**: matching glass layer across both surfaces |
+| ![Notifications and Calendar](assets/screenshots/notifications-calendar.jpg)<br>**Notifications & Calendar**: white text stays readable over bright areas | ![Taskbar Jump List](assets/screenshots/jump-list.jpg)<br>**Jump List**: right-click menu on taskbar app icons |
+| ![Start button Win+X menu](assets/screenshots/start-context-menu.jpg)<br>**Win+X Menu**: Start button context menu | ![System Tray context menu](assets/screenshots/tray-context-menu.png)<br>**System Tray Menu**: native left-click selection preserved |
+
 ## Usage
 
 1. Download `puwbar.exe` from [Releases](https://github.com/erikpuw/puwbar/releases), put it in a permanent folder, and run it.

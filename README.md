@@ -30,6 +30,14 @@
 
 **Khởi động cùng Windows** hỏi quyền quản trị một lần khi bật để tạo tác vụ Task Scheduler chạy ngay lúc đăng nhập (không trễ, tự chờ Explorer XAML sẵn sàng trong 30 giây). Nếu từ chối UAC, chương trình tự chuyển sang khóa `HKCU\...\Run`. Bỏ tick thì tắt.
 
+## Ảnh chụp
+
+| | |
+|---|---|
+| ![Start Menu và Taskbar kính mờ](assets/screenshots/start-menu.jpg)<br>**Start Menu & Taskbar**: kính mờ nổi bo góc 12px, viền trắng mảnh | ![Quick Settings và System Tray](assets/screenshots/control-center.jpg)<br>**Control Center & System Tray**: đồng bộ cùng một lớp kính mờ |
+| ![Thông báo và Lịch](assets/screenshots/notifications-calendar.jpg)<br>**Thông báo & Lịch**: đọc rõ chữ trắng cả trên nền sáng | ![Jump List chuột phải ứng dụng](assets/screenshots/jump-list.jpg)<br>**Jump List**: menu chuột phải trên biểu tượng ứng dụng |
+| ![Menu chuột phải nút Start](assets/screenshots/start-context-menu.jpg)<br>**Menu Win+X**: menu chuột phải nút Start | ![Menu chuột phải System Tray](assets/screenshots/tray-context-menu.png)<br>**Menu System Tray**: giữ nguyên bấm chọn chuột trái bình thường |
+
 ## Cài đặt và dùng
 
 1. Tải `puwbar.exe` từ mục [Releases](https://github.com/erikpuw/puwbar/releases), đặt vào một thư mục cố định rồi chạy trực tiếp.
