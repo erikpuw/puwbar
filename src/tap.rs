@@ -434,9 +434,13 @@ struct SessionGuard {
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         unsafe {
+            // Signal UWP AppContainer hosts (Start Menu, Quick Settings, Notifications/Calendar, Jump Lists)
+            // to restore all native XAML properties via the shared config file.
+            let cfg = std::env::temp_dir().join("puwbar_dark_tint.cfg");
+            let _ = std::fs::write(&cfg, b"stop");
             if !self.stop_event.is_null() {
                 SetEvent(self.stop_event);
-                std::thread::sleep(Duration::from_millis(250));
+                std::thread::sleep(Duration::from_millis(350));
                 CloseHandle(self.stop_event);
             }
             if !self.ready_event.is_null() {

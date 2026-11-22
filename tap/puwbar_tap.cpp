@@ -61,13 +61,14 @@ static constexpr uint32_t SURF_ALL            = 0x7Fu;
 struct GlassConfig {
     int level = 2; // 0 = Light (24%), 1 = Balanced (45%), 2 = High contrast (62%)
     uint32_t surfaces = SURF_ALL;
+    bool stop = false;
 
     uint32_t packed() const {
         return (static_cast<uint32_t>(level) << 8) | (surfaces & SURF_ALL);
     }
 };
 
-// Reads "<level>:<hex-mask>" from puwbar_dark_tint.cfg next to puwbar_tap_*.dll.
+// Reads "<level>:<hex-mask>" or "stop" from puwbar_dark_tint.cfg next to puwbar_tap_*.dll.
 static GlassConfig ReadGlassConfig() {
     GlassConfig cfg;
     wchar_t modPath[MAX_PATH]{};
@@ -85,6 +86,10 @@ static GlassConfig ReadGlassConfig() {
     bool ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr) != 0 && read >= 1;
     CloseHandle(h);
     if (!ok) return cfg;
+    if (buf[0] == 's') {
+        cfg.stop = true;
+        return cfg;
+    }
     if (buf[0] == '0') cfg.level = 0;
     else if (buf[0] == '1') cfg.level = 1;
     else cfg.level = 2;
@@ -119,6 +124,13 @@ struct SavedPropCallback {
     winrt::weak_ref<xaml::DependencyObject> target;
     xaml::DependencyProperty prop{nullptr};
     int64_t token = 0;
+};
+
+struct SavedAcrylic {
+    winrt::weak_ref<media::AcrylicBrush> brush;
+    winrt::Windows::UI::Color tintColor{};
+    double tintOpacity = 1.0;
+    winrt::Windows::Foundation::IReference<double> tintLum{nullptr};
 };
 
 // Minimal D2D1 effect wrappers for always-on fast Backdrop Gaussian blur + glass tint.
@@ -937,6 +949,15 @@ private:
             try {
                 if (auto ctrl = obj.try_as<controls::Control>()) {
                     if (auto ac = ctrl.Background().try_as<media::AcrylicBrush>()) {
+                        {
+                            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                            m_savedAcrylics.push_back(SavedAcrylic{
+                                winrt::make_weak(ac),
+                                ac.TintColor(),
+                                ac.TintOpacity(),
+                                ac.TintLuminosityOpacity(),
+                            });
+                        }
                         if (level == 0) {
                             ac.TintColor(winrt::Windows::UI::Color{255, 24, 30, 44});
                             ac.TintOpacity(0.18);
@@ -1064,11 +1085,13 @@ private:
     void RestoreAllOnUiThread() {
         std::vector<SavedPropCallback> callbacks;
         std::vector<winrt::weak_ref<xaml::UIElement>> implicits;
+        std::vector<SavedAcrylic> acrylics;
         std::vector<SavedProp> items;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
             callbacks.swap(m_propCallbacks);
             implicits.swap(m_implicitTargets);
+            acrylics.swap(m_savedAcrylics);
             items.swap(m_saved);
         }
         for (auto& cb : callbacks) {
@@ -1085,6 +1108,16 @@ private:
                     if (auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el)) {
                         visual.ImplicitAnimations(nullptr);
                     }
+                }
+            } catch (...) {
+            }
+        }
+        for (auto it = acrylics.rbegin(); it != acrylics.rend(); ++it) {
+            try {
+                if (auto ac = it->brush.get()) {
+                    ac.TintColor(it->tintColor);
+                    ac.TintOpacity(it->tintOpacity);
+                    ac.TintLuminosityOpacity(it->tintLum);
                 }
             } catch (...) {
             }
@@ -1229,11 +1262,15 @@ private:
             m_watcher = std::thread([this]() {
                 uint32_t lastPacked = ReadGlassConfig().packed();
                 while (!m_stopWatcher.load()) {
-                    Sleep(350);
+                    Sleep(200);
                     if (m_stopWatcher.load()) break;
-                    uint32_t cur = ReadGlassConfig().packed();
-                    if (cur != lastPacked) {
-                        lastPacked = cur;
+                    GlassConfig cur = ReadGlassConfig();
+                    if (cur.stop) {
+                        RequestRestoreAndUnadvise();
+                        break;
+                    }
+                    if (cur.packed() != lastPacked) {
+                        lastPacked = cur.packed();
                         DispatchReload();
                     }
                 }
@@ -1360,6 +1397,7 @@ private:
     std::unordered_map<InstanceHandle, ElementMeta> m_meta;
     std::vector<TrackedElement> m_tracked;
     std::vector<SavedProp> m_saved;
+    std::vector<SavedAcrylic> m_savedAcrylics;
     std::vector<SavedPropCallback> m_propCallbacks;
     std::vector<winrt::weak_ref<xaml::UIElement>> m_implicitTargets;
     std::atomic<bool> m_stopWatcher{false};
