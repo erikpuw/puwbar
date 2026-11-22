@@ -318,13 +318,8 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     }
 
     void OnDisconnected() {
-        try {
-            if (auto b = CompositionBrush()) {
-                b.Close();
-                CompositionBrush(nullptr);
-            }
-        } catch (...) {
-        }
+        // Keep CompositionBrush alive during XAML popup slide-out/dismiss transitions
+        // (e.g. Jump List close animation); WinRT releases it automatically on destruction.
     }
 };
 
