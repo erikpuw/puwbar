@@ -38,12 +38,31 @@ const CMD_LANG_VI: u32 = 1003;
 const CMD_LANG_EN: u32 = 1004;
 const CMD_ABOUT: u32 = 1005;
 const CMD_EXIT: u32 = 1006;
-const CMD_DARK_TINT: u32 = 1007;
+const CMD_TINT_LIGHT: u32 = 1007;
+const CMD_TINT_BALANCED: u32 = 1008;
+const CMD_TINT_HIGH: u32 = 1009;
+const CMD_SURF_START_MENU: u32 = 1010;
+const CMD_SURF_CONTROL_CENTER: u32 = 1011;
+const CMD_SURF_NOTIFICATIONS: u32 = 1012;
+const CMD_SURF_CALENDAR: u32 = 1013;
+const CMD_SURF_JUMP_LIST: u32 = 1014;
+const CMD_SURF_TOOLTIP: u32 = 1015;
+const CMD_SURF_THUMBNAIL: u32 = 1016;
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "PuwBar";
 const APP_KEY: &str = "Software\\PuwBar";
 const LANG_VALUE: &str = "Language";
 const DARK_TINT_VALUE: &str = "DarkTint";
+const SURFACES_VALUE: &str = "Surfaces";
+
+const SURF_START_MENU: u32 = 1 << 0;
+const SURF_CONTROL_CENTER: u32 = 1 << 1;
+const SURF_NOTIFICATIONS: u32 = 1 << 2;
+const SURF_CALENDAR: u32 = 1 << 3;
+const SURF_JUMP_LIST: u32 = 1 << 4;
+const SURF_TOOLTIP: u32 = 1 << 5;
+const SURF_THUMBNAIL: u32 = 1 << 6;
+const SURF_ALL: u32 = 0x7F;
 const TASK_NAME: &str = "PuwBar";
 const STOP_EVENT_NAME: &str = "Local\\PuwBar.StopEvent";
 const READY_EVENT_NAME: &str = "Local\\PuwBar.TapReady";
@@ -113,37 +132,51 @@ unsafe fn save_lang(lang: Lang) {
     RegCloseKey(hkey);
 }
 
-fn dark_tint_cfg_byte(enabled: bool) -> &'static [u8] {
-    if enabled { b"1" } else { b"0" }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GlassContrast {
+    Light = 0,
+    Balanced = 1,
+    High = 2,
 }
 
-fn sync_dark_tint_file(enabled: bool) {
+impl GlassContrast {
+    fn from_u32(v: u32) -> Self {
+        match v {
+            0 => Self::Light,
+            1 => Self::Balanced,
+            _ => Self::High,
+        }
+    }
+}
+
+fn format_glass_cfg(level: GlassContrast, surfaces: u32) -> String {
+    format!("{}:{:02x}", level as u32, surfaces & SURF_ALL)
+}
+
+fn sync_glass_cfg_file(level: GlassContrast, surfaces: u32) {
     let cfg = std::env::temp_dir().join("puwbar_dark_tint.cfg");
     let existed = cfg.exists();
-    if std::fs::write(&cfg, dark_tint_cfg_byte(enabled)).is_ok() && !existed {
+    if std::fs::write(&cfg, format_glass_cfg(level, surfaces)).is_ok() && !existed {
         grant_appcontainer_read(&cfg);
     }
 }
 
-unsafe fn read_dark_tint() -> bool {
-    let mut val = 1u32;
+unsafe fn read_reg_dword(value_name: &str, default: u32) -> u32 {
+    let mut val = default;
     let mut bytes = size_of::<u32>() as u32;
     let ok = RegGetValueW(
         HKEY_CURRENT_USER,
         wide(APP_KEY).as_ptr(),
-        wide(DARK_TINT_VALUE).as_ptr(),
+        wide(value_name).as_ptr(),
         RRF_RT_REG_DWORD,
         null_mut(),
         (&raw mut val).cast(),
         &mut bytes,
     ) == 0;
-    if !ok {
-        return true;
-    }
-    val != 0
+    if ok { val } else { default }
 }
 
-unsafe fn save_dark_tint(enabled: bool) {
+unsafe fn save_reg_dword(value_name: &str, val: u32) {
     let mut hkey = null_mut();
     if RegCreateKeyExW(
         HKEY_CURRENT_USER,
@@ -157,10 +190,9 @@ unsafe fn save_dark_tint(enabled: bool) {
         null_mut(),
     ) == 0
     {
-        let val = u32::from(enabled);
         RegSetValueExW(
             hkey,
-            wide(DARK_TINT_VALUE).as_ptr(),
+            wide(value_name).as_ptr(),
             0,
             REG_DWORD,
             (&raw const val).cast(),
@@ -168,7 +200,25 @@ unsafe fn save_dark_tint(enabled: bool) {
         );
         RegCloseKey(hkey);
     }
-    sync_dark_tint_file(enabled);
+}
+
+unsafe fn read_glass_contrast() -> GlassContrast {
+    GlassContrast::from_u32(read_reg_dword(DARK_TINT_VALUE, GlassContrast::High as u32))
+}
+
+unsafe fn read_surfaces_mask() -> u32 {
+    read_reg_dword(SURFACES_VALUE, SURF_ALL) & SURF_ALL
+}
+
+unsafe fn save_glass_contrast(level: GlassContrast) {
+    save_reg_dword(DARK_TINT_VALUE, level as u32);
+    sync_glass_cfg_file(level, read_surfaces_mask());
+}
+
+unsafe fn save_surfaces_mask(mask: u32) {
+    let clean = mask & SURF_ALL;
+    save_reg_dword(SURFACES_VALUE, clean);
+    sync_glass_cfg_file(read_glass_contrast(), clean);
 }
 
 type InitXamlDiagExFn = unsafe extern "system" fn(
@@ -656,11 +706,33 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     }
     let lang = read_lang();
     let autostart = is_autostart_enabled();
-    let dark_tint = read_dark_tint();
-    let (lbl_auto, lbl_dark, lbl_reapply, lbl_lang, lbl_about, lbl_exit) = match lang {
+    let contrast = read_glass_contrast();
+    let surfaces = read_surfaces_mask();
+    let (
+        lbl_auto,
+        lbl_tint,
+        lbl_light,
+        lbl_balanced,
+        lbl_high,
+        lbl_surfaces,
+        lbl_notif,
+        lbl_cal,
+        lbl_thumb,
+        lbl_reapply,
+        lbl_lang,
+        lbl_about,
+        lbl_exit,
+    ) = match lang {
         Lang::Vi => (
             "Khởi động cùng Windows",
-            "Phủ nền tối tăng tương phản",
+            "Độ tối lớp kính",
+            "Trong nhẹ (24%)",
+            "Cân bằng (45%)",
+            "Tương phản cao (62%)",
+            "Khu vực áp kính",
+            "Thông báo",
+            "Lịch",
+            "Xem trước cửa sổ",
             "Áp dụng lại giao diện",
             "Ngôn ngữ",
             "Giới thiệu PuwBar",
@@ -668,7 +740,14 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         ),
         Lang::En => (
             "Start with Windows",
-            "Dark contrast tint",
+            "Glass contrast",
+            "Light (24%)",
+            "Balanced (45%)",
+            "High contrast (62%)",
+            "Glass surfaces",
+            "Notifications",
+            "Calendar",
+            "Window previews",
             "Reapply taskbar glass",
             "Language",
             "About PuwBar",
@@ -681,12 +760,42 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         CMD_AUTOSTART as usize,
         wide(lbl_auto).as_ptr(),
     );
-    AppendMenuW(
-        menu,
-        MF_STRING | if dark_tint { MF_CHECKED } else { MF_UNCHECKED },
-        CMD_DARK_TINT as usize,
-        wide(lbl_dark).as_ptr(),
-    );
+    let tint_menu = CreatePopupMenu();
+    if !tint_menu.is_null() {
+        for (level, cmd, label) in [
+            (GlassContrast::Light, CMD_TINT_LIGHT, lbl_light),
+            (GlassContrast::Balanced, CMD_TINT_BALANCED, lbl_balanced),
+            (GlassContrast::High, CMD_TINT_HIGH, lbl_high),
+        ] {
+            AppendMenuW(
+                tint_menu,
+                MF_STRING | if contrast == level { MF_CHECKED } else { MF_UNCHECKED },
+                cmd as usize,
+                wide(label).as_ptr(),
+            );
+        }
+        AppendMenuW(menu, MF_POPUP, tint_menu as usize, wide(lbl_tint).as_ptr());
+    }
+    let surf_menu = CreatePopupMenu();
+    if !surf_menu.is_null() {
+        for (bit, cmd, label) in [
+            (SURF_START_MENU, CMD_SURF_START_MENU, "Start Menu"),
+            (SURF_CONTROL_CENTER, CMD_SURF_CONTROL_CENTER, "Control Center"),
+            (SURF_NOTIFICATIONS, CMD_SURF_NOTIFICATIONS, lbl_notif),
+            (SURF_CALENDAR, CMD_SURF_CALENDAR, lbl_cal),
+            (SURF_JUMP_LIST, CMD_SURF_JUMP_LIST, "Jump List"),
+            (SURF_TOOLTIP, CMD_SURF_TOOLTIP, "Tooltip"),
+            (SURF_THUMBNAIL, CMD_SURF_THUMBNAIL, lbl_thumb),
+        ] {
+            AppendMenuW(
+                surf_menu,
+                MF_STRING | if (surfaces & bit) != 0 { MF_CHECKED } else { MF_UNCHECKED },
+                cmd as usize,
+                wide(label).as_ptr(),
+            );
+        }
+        AppendMenuW(menu, MF_POPUP, surf_menu as usize, wide(lbl_surfaces).as_ptr());
+    }
     AppendMenuW(
         menu,
         MF_STRING,
@@ -745,8 +854,21 @@ unsafe fn show_tray_menu(hwnd: HWND) {
 
     match choice {
         CMD_AUTOSTART => set_autostart(!autostart),
-        CMD_DARK_TINT => {
-            save_dark_tint(!dark_tint);
+        CMD_TINT_LIGHT | CMD_TINT_BALANCED | CMD_TINT_HIGH => {
+            let next = match choice {
+                CMD_TINT_LIGHT => GlassContrast::Light,
+                CMD_TINT_BALANCED => GlassContrast::Balanced,
+                _ => GlassContrast::High,
+            };
+            save_glass_contrast(next);
+            let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
+            if !reload.is_null() {
+                SetEvent(reload);
+            }
+        }
+        CMD_SURF_START_MENU..=CMD_SURF_THUMBNAIL => {
+            let bit = 1u32 << (choice - CMD_SURF_START_MENU);
+            save_surfaces_mask(surfaces ^ bit);
             let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
             if !reload.is_null() {
                 SetEvent(reload);
@@ -867,8 +989,8 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
             ShowWindow(tray, SW_SHOWNA);
         }
 
-        // Sync persisted dark-tint toggle for both Explorer and AppContainer hosts before attaching.
-        sync_dark_tint_file(read_dark_tint());
+        // Sync persisted glass contrast preset & enabled surfaces for both Explorer and AppContainer hosts before attaching.
+        sync_glass_cfg_file(read_glass_contrast(), read_surfaces_mask());
 
         // Boost priority during initial attach so PuwBar styles Explorer as soon as XAML initializes.
         let proc = GetCurrentProcess();
@@ -975,8 +1097,16 @@ mod tests {
     }
 
     #[test]
-    fn dark_tint_cfg_encodes_boolean_flag() {
-        assert_eq!(dark_tint_cfg_byte(true), b"1");
-        assert_eq!(dark_tint_cfg_byte(false), b"0");
+    fn glass_contrast_presets_encode_and_parse() {
+        assert_eq!(GlassContrast::from_u32(0), GlassContrast::Light);
+        assert_eq!(GlassContrast::from_u32(1), GlassContrast::Balanced);
+        assert_eq!(GlassContrast::from_u32(2), GlassContrast::High);
+        assert_eq!(GlassContrast::from_u32(99), GlassContrast::High);
+        assert_eq!(format_glass_cfg(GlassContrast::Light, SURF_ALL), "0:7f");
+        assert_eq!(
+            format_glass_cfg(GlassContrast::Balanced, SURF_START_MENU | SURF_CALENDAR),
+            "1:09"
+        );
+        assert_eq!(format_glass_cfg(GlassContrast::High, 0), "2:00");
     }
 }

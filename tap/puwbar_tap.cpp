@@ -49,23 +49,50 @@ static constexpr GUID CLSID_PuwBarTap = {
 static std::atomic<long> g_dllRefCount{0};
 static HMODULE g_hModule = nullptr;
 
-// Reads the shared 1-byte toggle file next to puwbar_tap_*.dll (readable from both Explorer and UWP AppContainers).
-static bool ReadDarkTintEnabled() {
+static constexpr uint32_t SURF_START_MENU     = 1u << 0;
+static constexpr uint32_t SURF_CONTROL_CENTER = 1u << 1;
+static constexpr uint32_t SURF_NOTIFICATIONS  = 1u << 2;
+static constexpr uint32_t SURF_CALENDAR       = 1u << 3;
+static constexpr uint32_t SURF_JUMP_LIST      = 1u << 4;
+static constexpr uint32_t SURF_TOOLTIP        = 1u << 5;
+static constexpr uint32_t SURF_THUMBNAIL      = 1u << 6;
+static constexpr uint32_t SURF_ALL            = 0x7Fu;
+
+struct GlassConfig {
+    int level = 2; // 0 = Light (24%), 1 = Balanced (45%), 2 = High contrast (62%)
+    uint32_t surfaces = SURF_ALL;
+
+    uint32_t packed() const {
+        return (static_cast<uint32_t>(level) << 8) | (surfaces & SURF_ALL);
+    }
+};
+
+// Reads "<level>:<hex-mask>" from puwbar_dark_tint.cfg next to puwbar_tap_*.dll.
+static GlassConfig ReadGlassConfig() {
+    GlassConfig cfg;
     wchar_t modPath[MAX_PATH]{};
     DWORD len = GetModuleFileNameW(g_hModule, modPath, MAX_PATH);
-    if (len == 0 || len >= MAX_PATH) return true;
+    if (len == 0 || len >= MAX_PATH) return cfg;
     std::wstring path(modPath, len);
     size_t slash = path.find_last_of(L"\\/");
-    if (slash == std::wstring::npos) return true;
+    if (slash == std::wstring::npos) return cfg;
     path.resize(slash + 1);
     path += L"puwbar_dark_tint.cfg";
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return true;
-    char ch = '1';
+    if (h == INVALID_HANDLE_VALUE) return cfg;
+    char buf[16]{};
     DWORD read = 0;
-    bool ok = ReadFile(h, &ch, 1, &read, nullptr) != 0 && read == 1;
+    bool ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr) != 0 && read >= 1;
     CloseHandle(h);
-    return !ok || ch != '0';
+    if (!ok) return cfg;
+    if (buf[0] == '0') cfg.level = 0;
+    else if (buf[0] == '1') cfg.level = 1;
+    else cfg.level = 2;
+    if (read >= 3 && buf[1] == ':') {
+        unsigned long mask = strtoul(buf + 2, nullptr, 16);
+        cfg.surfaces = static_cast<uint32_t>(mask) & SURF_ALL;
+    }
+    return cfg;
 }
 
 struct ElementMeta {
@@ -147,15 +174,20 @@ struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, ge::IGraphicsE
 
 struct ColorTintEffect : winrt::implements<ColorTintEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
     winrt::hstring m_name{L"Tint"};
-    // Premultiplied RGBA: 62% dark-smoke when dark contrast tint is ON, 24% airy clear glass when OFF
+    // Premultiplied RGBA: 0 = 24% light, 1 = 45% balanced, 2 = 62% high contrast
     float m_color[4] = {0.028f, 0.035f, 0.052f, 0.62f};
 
-    explicit ColorTintEffect(bool darkTint) {
-        if (!darkTint) {
+    explicit ColorTintEffect(int level) {
+        if (level == 0) {
             m_color[0] = 0.020f;
             m_color[1] = 0.025f;
             m_color[2] = 0.040f;
             m_color[3] = 0.24f;
+        } else if (level == 1) {
+            m_color[0] = 0.024f;
+            m_color[1] = 0.030f;
+            m_color[2] = 0.046f;
+            m_color[3] = 0.45f;
         }
     }
 
@@ -237,15 +269,19 @@ struct CompositeEffect : winrt::implements<CompositeEffect, ge::IGraphicsEffect,
     }
 };
 
+static winrt::Windows::UI::Color FallbackColorForLevel(int level) {
+    if (level == 0) return winrt::Windows::UI::Color{90, 18, 22, 32};
+    if (level == 1) return winrt::Windows::UI::Color{128, 16, 20, 30};
+    return winrt::Windows::UI::Color{160, 14, 18, 26};
+}
+
 struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     comp::Compositor m_compositor{nullptr};
-    bool m_darkTint = true;
+    int m_level = 2;
 
-    explicit PuwGlassBrush(comp::Compositor compositor, bool darkTint)
-        : m_compositor(std::move(compositor)), m_darkTint(darkTint) {
-        FallbackColor(darkTint
-            ? winrt::Windows::UI::Color{160, 14, 18, 26}
-            : winrt::Windows::UI::Color{90, 18, 22, 32});
+    explicit PuwGlassBrush(comp::Compositor compositor, int level)
+        : m_compositor(std::move(compositor)), m_level(level) {
+        FallbackColor(FallbackColorForLevel(level));
     }
 
     void OnConnected() {
@@ -255,7 +291,7 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
 
                 auto blur = winrt::make_self<GaussianBlurEffect>();
                 blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
-                auto tint = winrt::make_self<ColorTintEffect>(m_darkTint);
+                auto tint = winrt::make_self<ColorTintEffect>(m_level);
                 auto composite = winrt::make_self<CompositeEffect>();
                 composite->m_src0 = blur.as<ge::IGraphicsEffectSource>();
                 composite->m_src1 = tint.as<ge::IGraphicsEffectSource>();
@@ -281,21 +317,19 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
 };
 
 static media::Brush MakePuwGlass(xaml::DependencyObject const& obj) {
-    bool darkTint = ReadDarkTintEnabled();
+    int level = ReadGlassConfig().level;
     try {
         if (auto el = obj.try_as<xaml::UIElement>()) {
             auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
             if (visual) {
                 if (auto compositor = visual.Compositor()) {
-                    return winrt::make<PuwGlassBrush>(compositor, darkTint);
+                    return winrt::make<PuwGlassBrush>(compositor, level);
                 }
             }
         }
     } catch (...) {
     }
-    return media::SolidColorBrush(darkTint
-        ? winrt::Windows::UI::Color{160, 14, 18, 26}
-        : winrt::Windows::UI::Color{90, 18, 22, 32});
+    return media::SolidColorBrush(FallbackColorForLevel(level));
 }
 
 static media::SolidColorBrush MakePuwBorder() {
@@ -834,18 +868,22 @@ private:
             return;
         }
 
-        // 3c. Replace thumbnail hover preview background with the exact same PuwBar frosted glass (MakePuwGlass)
+        // 3c. Replace thumbnail hover preview background with PuwBar frosted glass (when enabled)
         if (name == L"HoverFlyoutBackgroundControl") {
-            SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
+            if ((ReadGlassConfig().surfaces & SURF_THUMBNAIL) != 0) {
+                SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
+            }
             return;
         }
 
         if (name == L"HoverFlyoutBackground") {
-            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
-            SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
-            SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-            SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
-            SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            if ((ReadGlassConfig().surfaces & SURF_THUMBNAIL) != 0) {
+                SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
+                SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
+                SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+                SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
+                SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            }
             return;
         }
 
@@ -896,18 +934,22 @@ private:
 
         // 5b. Adjust System Tray right-click MenuFlyoutPresenter's existing AcrylicBrush in-place (keeps native click hit-testing intact)
         if (type == L"Windows.UI.Xaml.Controls.MenuFlyoutPresenter") {
-            bool darkTint = ReadDarkTintEnabled();
+            int level = ReadGlassConfig().level;
             try {
                 if (auto ctrl = obj.try_as<controls::Control>()) {
                     if (auto ac = ctrl.Background().try_as<media::AcrylicBrush>()) {
-                        if (darkTint) {
-                            ac.TintColor(winrt::Windows::UI::Color{255, 14, 18, 26});
-                            ac.TintOpacity(0.62);
-                            ac.TintLuminosityOpacity(0.65);
-                        } else {
+                        if (level == 0) {
                             ac.TintColor(winrt::Windows::UI::Color{255, 24, 30, 44});
                             ac.TintOpacity(0.18);
                             ac.TintLuminosityOpacity(0.22);
+                        } else if (level == 1) {
+                            ac.TintColor(winrt::Windows::UI::Color{255, 18, 24, 36});
+                            ac.TintOpacity(0.40);
+                            ac.TintLuminosityOpacity(0.42);
+                        } else {
+                            ac.TintColor(winrt::Windows::UI::Color{255, 14, 18, 26});
+                            ac.TintOpacity(0.62);
+                            ac.TintLuminosityOpacity(0.65);
                         }
                     }
                 }
@@ -919,47 +961,63 @@ private:
             return;
         }
 
-        // 5c. Matching glass background (12px blur + 65% dark-smoke veil) for taskbar & tray hover tooltips
+        // 5c. Matching glass background for taskbar & tray hover tooltips (when enabled)
         if (type == L"Windows.UI.Xaml.Controls.ToolTip") {
-            SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj));
-            SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{8.0, 8.0, 8.0, 8.0}));
-            SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
-            SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
-            return;
-        }
-
-        // 5d. Unified 62% dark-smoke glass for Notification Center, Calendar & Quick Settings (locked against VisualState resets)
-        if (name == L"NotificationCenterGrid"
-            || name == L"CalendarCenterGrid"
-            || name == L"ControlCenterRegion"
-            || name == L"MediaTransportControlsRegion") {
-            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
-            LockGlassBackground(obj, controls::Panel::BackgroundProperty());
-            if (obj.try_as<controls::Grid>()) {
-                SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
-                SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
-                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            if ((ReadGlassConfig().surfaces & SURF_TOOLTIP) != 0) {
+                SaveAndSet(obj, controls::Control::BackgroundProperty(), MakePuwGlass(obj));
+                SaveAndSet(obj, controls::Control::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{8.0, 8.0, 8.0, 8.0}));
+                SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
+                SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             }
             return;
         }
 
-        // 5e. Unified 62% dark-smoke glass for Taskbar Jump Lists & Start Menu (locked against VisualState resets)
+        // 5d. Glass for Notification Center, Calendar & Quick Settings (individually toggleable; locked against VisualState resets)
+        if (name == L"NotificationCenterGrid"
+            || name == L"CalendarCenterGrid"
+            || name == L"ControlCenterRegion"
+            || name == L"MediaTransportControlsRegion") {
+            uint32_t surfaces = ReadGlassConfig().surfaces;
+            bool enabled = (name == L"NotificationCenterGrid") ? ((surfaces & SURF_NOTIFICATIONS) != 0)
+                : (name == L"CalendarCenterGrid") ? ((surfaces & SURF_CALENDAR) != 0)
+                : ((surfaces & SURF_CONTROL_CENTER) != 0);
+            if (enabled) {
+                SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
+                LockGlassBackground(obj, controls::Panel::BackgroundProperty());
+                if (obj.try_as<controls::Grid>()) {
+                    SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
+                    SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+                    SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
+                    SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+                }
+            }
+            return;
+        }
+
+        // 5e. Glass for Taskbar Jump Lists & Start Menu (individually toggleable; locked against VisualState resets)
         if (name == L"JumpListRestyledAcrylic"
             || name == L"SystemItemsAcrylic"
             || name == L"JumpListAcrylic"
             || (name == L"AcrylicBorder" && GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr)) {
-            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
-            LockGlassBackground(obj, controls::Border::BackgroundProperty());
-            SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
-            SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-            SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
-            SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            uint32_t surfaces = ReadGlassConfig().surfaces;
+            bool enabled = (name == L"AcrylicBorder")
+                ? ((surfaces & SURF_START_MENU) != 0)
+                : ((surfaces & SURF_JUMP_LIST) != 0);
+            if (enabled) {
+                SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
+                LockGlassBackground(obj, controls::Border::BackgroundProperty());
+                SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
+                SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+                SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
+                SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            }
             return;
         }
 
         if (name == L"AcrylicOverlay" && GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr) {
-            SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
+            if ((ReadGlassConfig().surfaces & SURF_START_MENU) != 0) {
+                SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
+            }
             return;
         }
 
@@ -1177,13 +1235,13 @@ private:
             || GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr) {
             AddRef();
             m_watcher = std::thread([this]() {
-                bool lastDarkTint = ReadDarkTintEnabled();
+                uint32_t lastPacked = ReadGlassConfig().packed();
                 while (!m_stopWatcher.load()) {
                     Sleep(350);
                     if (m_stopWatcher.load()) break;
-                    bool cur = ReadDarkTintEnabled();
-                    if (cur != lastDarkTint) {
-                        lastDarkTint = cur;
+                    uint32_t cur = ReadGlassConfig().packed();
+                    if (cur != lastPacked) {
+                        lastPacked = cur;
                         DispatchReload();
                     }
                 }
