@@ -1017,25 +1017,23 @@ private:
             return;
         }
 
-        // 5e. Taskbar Jump Lists: tune native AcrylicBrush in-place so blur stays alive during slide-up/slide-down transitions
-        if (name == L"JumpListRestyledAcrylic"
-            || name == L"SystemItemsAcrylic"
-            || name == L"JumpListAcrylic") {
-            GlassConfig cfg = ReadGlassConfig();
-            if ((cfg.surfaces & SURF_JUMP_LIST) != 0) {
-                try {
-                    if (auto bd = obj.try_as<controls::Border>()) {
-                        if (auto ac = bd.Background().try_as<media::AcrylicBrush>()) {
-                            StyleNativeAcrylicInPlace(ac, cfg.level);
-                        } else {
-                            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
-                        }
-                    }
-                } catch (...) {
-                }
+        // 5e. Taskbar Jump Lists: use PuwGlassBrush (never falls back to opaque fbA=255 on focus loss/slide-down)
+        //     on JumpListRestyledAcrylic, and make stacked inner acrylic borders transparent so 24%/45%/62% matches exactly.
+        if (name == L"JumpListRestyledAcrylic") {
+            if ((ReadGlassConfig().surfaces & SURF_JUMP_LIST) != 0) {
+                SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
+                LockGlassBackground(obj, controls::Border::BackgroundProperty());
+                SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
                 SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
                 SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            }
+            return;
+        }
+
+        if (name == L"SystemItemsAcrylic" || name == L"JumpListAcrylic") {
+            if ((ReadGlassConfig().surfaces & SURF_JUMP_LIST) != 0) {
+                SaveAndSet(obj, controls::Border::BackgroundProperty(), media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));
             }
             return;
         }
