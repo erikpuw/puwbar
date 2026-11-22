@@ -37,6 +37,7 @@
 | ![Start Menu and Taskbar glass](assets/screenshots/start-menu.jpg)<br>**Start Menu & Taskbar**: 12px rounded frosted glass with subtle hairline border | ![Control Center and System Tray](assets/screenshots/control-center.jpg)<br>**Control Center & System Tray**: matching glass layer across both surfaces |
 | ![Notifications and Calendar](assets/screenshots/notifications-calendar.jpg)<br>**Notifications & Calendar**: white text stays readable over bright areas | ![Taskbar Jump List](assets/screenshots/jump-list.jpg)<br>**Jump List**: right-click menu on taskbar app icons |
 | ![Start button Win+X menu](assets/screenshots/start-context-menu.jpg)<br>**Win+X Menu**: Start button context menu | ![System Tray context menu](assets/screenshots/tray-context-menu.png)<br>**System Tray Menu**: native left-click selection preserved |
+| ![PuwBar tray menu English](assets/screenshots/tray-en.png)<br>**PuwBar Menu (English)**: glass contrast presets & per-surface toggles | ![PuwBar tray menu Vietnamese](assets/screenshots/tray-vi.png)<br>**PuwBar Menu (Vietnamese)**: switch language directly from the tray |
 
 ## Usage
 
