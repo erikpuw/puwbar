@@ -1,4 +1,5 @@
 1 ICON "../../assets/puwbar.ico"
+1 24 "puwbar-setup.manifest"
 
 1 VERSIONINFO
 FILEVERSION     1,0,6,0

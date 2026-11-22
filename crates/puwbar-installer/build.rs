@@ -63,8 +63,8 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=puwbar-setup.rc");
+    println!("cargo:rerun-if-changed=puwbar-setup.manifest");
     println!("cargo:rerun-if-changed=../../assets/puwbar.ico");
-    println!("cargo:rerun-if-changed=../../assets/puwbar-icon.rgba");
 
     let rc_file = manifest_dir.join("puwbar-setup.rc");
     let res_file = out_dir.join("puwbar-setup.res");
