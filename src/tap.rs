@@ -431,17 +431,35 @@ struct SessionGuard {
     mutex: HANDLE,
 }
 
+unsafe fn terminate_process_by_name(target_exe: &str) {
+    if let Some(pid) = find_process_pid(target_exe) {
+        let proc = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if !proc.is_null() {
+            let _ = TerminateProcess(proc, 0);
+            CloseHandle(proc);
+        }
+    }
+}
+
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         unsafe {
-            // Signal UWP AppContainer hosts (Start Menu, Quick Settings, Notifications/Calendar, Jump Lists)
-            // to restore all native XAML properties via the shared config file.
+            // Signal Explorer TAP to restore native taskbar/tray cleanly without restarting Explorer.
             let cfg = std::env::temp_dir().join("puwbar_dark_tint.cfg");
             let _ = std::fs::write(&cfg, b"stop");
             if !self.stop_event.is_null() {
                 SetEvent(self.stop_event);
-                std::thread::sleep(Duration::from_millis(350));
+                std::thread::sleep(Duration::from_millis(250));
                 CloseHandle(self.stop_event);
+            }
+            // Restart stateless UWP flyout hosts so suspended hosts (Start Menu, Quick Settings,
+            // Notifications/Calendar, Jump Lists) immediately revert to 100% native UI and unload the DLL.
+            for host in [
+                "ShellExperienceHost.exe",
+                "ShellHost.exe",
+                "StartMenuExperienceHost.exe",
+            ] {
+                terminate_process_by_name(host);
             }
             if !self.ready_event.is_null() {
                 CloseHandle(self.ready_event);

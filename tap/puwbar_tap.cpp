@@ -1082,6 +1082,23 @@ private:
         }
     }
 
+    template <typename Fn>
+    static void RunOnObjectThread(xaml::DependencyObject const& obj, Fn&& fn) {
+        try {
+            auto disp = obj.Dispatcher();
+            if (disp && !disp.HasThreadAccess()) {
+                disp.RunAsync(
+                    winrt::Windows::UI::Core::CoreDispatcherPriority::High,
+                    [f = std::forward<Fn>(fn)]() mutable {
+                        try { f(); } catch (...) {}
+                    });
+            } else {
+                fn();
+            }
+        } catch (...) {
+        }
+    }
+
     void RestoreAllOnUiThread() {
         std::vector<SavedPropCallback> callbacks;
         std::vector<winrt::weak_ref<xaml::UIElement>> implicits;
@@ -1097,7 +1114,11 @@ private:
         for (auto& cb : callbacks) {
             try {
                 if (auto obj = cb.target.get()) {
-                    obj.UnregisterPropertyChangedCallback(cb.prop, cb.token);
+                    auto prop = cb.prop;
+                    auto token = cb.token;
+                    RunOnObjectThread(obj, [obj, prop, token]() {
+                        obj.UnregisterPropertyChangedCallback(prop, token);
+                    });
                 }
             } catch (...) {
             }
@@ -1105,9 +1126,11 @@ private:
         for (auto& imp : implicits) {
             try {
                 if (auto el = imp.get()) {
-                    if (auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el)) {
-                        visual.ImplicitAnimations(nullptr);
-                    }
+                    RunOnObjectThread(el, [el]() {
+                        if (auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el)) {
+                            visual.ImplicitAnimations(nullptr);
+                        }
+                    });
                 }
             } catch (...) {
             }
@@ -1115,9 +1138,14 @@ private:
         for (auto it = acrylics.rbegin(); it != acrylics.rend(); ++it) {
             try {
                 if (auto ac = it->brush.get()) {
-                    ac.TintColor(it->tintColor);
-                    ac.TintOpacity(it->tintOpacity);
-                    ac.TintLuminosityOpacity(it->tintLum);
+                    auto tintColor = it->tintColor;
+                    auto tintOpacity = it->tintOpacity;
+                    auto tintLum = it->tintLum;
+                    RunOnObjectThread(ac, [ac, tintColor, tintOpacity, tintLum]() {
+                        ac.TintColor(tintColor);
+                        ac.TintOpacity(tintOpacity);
+                        ac.TintLuminosityOpacity(tintLum);
+                    });
                 }
             } catch (...) {
             }
@@ -1125,11 +1153,16 @@ private:
         for (auto it = items.rbegin(); it != items.rend(); ++it) {
             try {
                 if (auto obj = it->target.get()) {
-                    if (it->wasUnset) {
-                        obj.ClearValue(it->prop);
-                    } else if (it->original) {
-                        obj.SetValue(it->prop, it->original);
-                    }
+                    auto prop = it->prop;
+                    auto original = it->original;
+                    bool wasUnset = it->wasUnset;
+                    RunOnObjectThread(obj, [obj, prop, original, wasUnset]() {
+                        if (wasUnset) {
+                            obj.ClearValue(prop);
+                        } else if (original) {
+                            obj.SetValue(prop, original);
+                        }
+                    });
                 }
             } catch (...) {
             }
