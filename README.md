@@ -8,7 +8,7 @@
 
 <p align="center">
   Tách thanh taskbar gốc thành các cụm kính nổi bo góc cho ứng dụng, System Tray và Widgets.<br>
-  Viết bằng Rust + C++/WinRT, có bộ cài đặt Windows riêng, không cần Windhawk, không cần cài Visual C++ Redistributable.
+  Viết bằng Rust + C++/WinRT, bộ cài đặt Windows ~750 KB, không cần Windhawk, không cần cài Visual C++ Redistributable.
 </p>
 
 <p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puwbar/releases">Bản mới nhất: v1.0.6</a></p>
@@ -41,10 +41,11 @@
 
 ## Cài đặt và dùng
 
-1. Tải bộ cài `puwbar-setup-v1.0.6-x64.exe` từ mục [Releases](https://github.com/erikpuw/puwbar/releases) và chạy trực tiếp.
-2. Trình cài đặt sẽ cài `puwbar.exe` vào `%LOCALAPPDATA%\Programs\PuwBar`, tạo shortcut Start Menu và đăng ký mục gỡ cài đặt trong **Installed apps**.
-3. Nếu giữ tick **Chạy cùng Windows khi đăng nhập**, Windows sẽ hiện hộp thoại UAC xin quyền Quản trị viên để đăng ký tác vụ Task Scheduler không độ trễ (`HighestAvailable`). Từ chối UAC sẽ tự chuyển sang khởi động thường qua `HKCU\...\Run`.
-4. Bấm vào icon PuwBar ở System Tray để chỉnh độ tối lớp kính, bật/tắt từng khu vực hoặc đổi ngôn ngữ. Nhấn `Ctrl+Alt+F12` hay chọn **Thoát PuwBar** để trả lại taskbar gốc mà không cần khởi động lại Explorer.
+1. Nếu đang chạy bản PuwBar cũ, hãy thoát trước khi cài (`Ctrl+Alt+F12` hoặc chọn **Thoát PuwBar** ở System Tray).
+2. Tải bộ cài `puwbar-setup-v1.0.6-x64.exe` (~750 KB) từ mục [Releases](https://github.com/erikpuw/puwbar/releases) và chạy trực tiếp.
+3. Trình cài đặt sẽ cài `puwbar.exe` vào `%LOCALAPPDATA%\Programs\PuwBar`, tạo shortcut Start Menu và đăng ký mục gỡ cài đặt trong **Installed apps**.
+4. Nếu giữ tick **Chạy cùng Windows khi đăng nhập**, Windows sẽ hiện hộp thoại UAC xin quyền Quản trị viên để đăng ký tác vụ Task Scheduler không độ trễ (`HighestAvailable`). Từ chối UAC sẽ tự chuyển sang khởi động thường qua `HKCU\...\Run`.
+5. Bấm vào icon PuwBar ở System Tray để chỉnh độ tối lớp kính, bật/tắt từng khu vực hoặc đổi ngôn ngữ. Nhấn `Ctrl+Alt+F12` hay chọn **Thoát PuwBar** để trả lại taskbar gốc mà không cần khởi động lại Explorer.
 
 Nếu máy đang bật mod chỉnh giao diện taskbar trong Windhawk (như `Windows 11 Taskbar Styler`), nên tắt mod đó để tránh hai bên cùng ghi đè thuộc tính XAML.
 

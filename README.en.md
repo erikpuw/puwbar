@@ -8,7 +8,7 @@
 
 <p align="center">
   Splits the native taskbar into separate rounded glass pills for apps, the System Tray, and Widgets.<br>
-  Written in Rust + C++/WinRT, ships with a native Windows installer, no Windhawk, no Visual C++ Redistributable required.
+  Written in Rust + C++/WinRT, ~750 KB Windows installer, no Windhawk, no Visual C++ Redistributable required.
 </p>
 
 <p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puwbar/releases">Latest: v1.0.6</a></p>
@@ -41,10 +41,11 @@
 
 ## Install & usage
 
-1. Download `puwbar-setup-v1.0.6-x64.exe` from [Releases](https://github.com/erikpuw/puwbar/releases) and run it.
-2. The installer installs `puwbar.exe` into `%LOCALAPPDATA%\Programs\PuwBar`, creates the Start Menu shortcut, and registers an entry in Windows **Installed apps** for clean removal.
-3. With **Start with Windows at logon** checked, Windows prompts for Administrator UAC to register a zero-delay Task Scheduler logon task (`HighestAvailable`). Declining UAC falls back to standard `HKCU\...\Run`.
-4. Click the PuwBar icon in the System Tray to change glass contrast, toggle individual surfaces, or switch language. Press `Ctrl+Alt+F12` or pick **Exit PuwBar** to restore the default taskbar without restarting Explorer.
+1. If an older copy of PuwBar is currently running, exit it first (`Ctrl+Alt+F12` or **Exit PuwBar** in the System Tray).
+2. Download `puwbar-setup-v1.0.6-x64.exe` (~750 KB) from [Releases](https://github.com/erikpuw/puwbar/releases) and run it.
+3. The installer installs `puwbar.exe` into `%LOCALAPPDATA%\Programs\PuwBar`, creates the Start Menu shortcut, and registers an entry in Windows **Installed apps** for clean removal.
+4. With **Start with Windows at logon** checked, Windows prompts for Administrator UAC to register a zero-delay Task Scheduler logon task (`HighestAvailable`). Declining UAC falls back to standard `HKCU\...\Run`.
+5. Click the PuwBar icon in the System Tray to change glass contrast, toggle individual surfaces, or switch language. Press `Ctrl+Alt+F12` or pick **Exit PuwBar** to restore the default taskbar without restarting Explorer.
 
 If a taskbar styling mod is active in Windhawk (such as `Windows 11 Taskbar Styler`), disable it before running PuwBar so both do not overwrite the same XAML elements.
 
