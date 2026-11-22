@@ -1178,7 +1178,14 @@ private:
         for (auto& t : alive) {
             try {
                 if (auto obj = t.target.get()) {
-                    ApplyStyleIfMatch(obj, t.type, t.name, t.parentType);
+                    auto typeCopy = t.type;
+                    auto nameCopy = t.name;
+                    auto parentCopy = t.parentType;
+                    AddRef();
+                    RunOnObjectThread(obj, [this, obj, typeCopy, nameCopy, parentCopy]() {
+                        ApplyStyleIfMatch(obj, typeCopy, nameCopy, parentCopy);
+                        Release();
+                    });
                 }
             } catch (...) {
             }

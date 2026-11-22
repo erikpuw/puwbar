@@ -154,10 +154,10 @@ fn format_glass_cfg(level: GlassContrast, surfaces: u32) -> String {
 }
 
 fn sync_glass_cfg_file(level: GlassContrast, surfaces: u32) {
+    static ACL_GRANTED: std::sync::Once = std::sync::Once::new();
     let cfg = std::env::temp_dir().join("puwbar_dark_tint.cfg");
-    let existed = cfg.exists();
-    if std::fs::write(&cfg, format_glass_cfg(level, surfaces)).is_ok() && !existed {
-        grant_appcontainer_read(&cfg);
+    if std::fs::write(&cfg, format_glass_cfg(level, surfaces)).is_ok() {
+        ACL_GRANTED.call_once(|| grant_appcontainer_read(&cfg));
     }
 }
 
