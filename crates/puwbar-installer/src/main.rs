@@ -233,7 +233,19 @@ impl eframe::App for InstallerApp {
                     }
                 }
 
-                ui.add_space(10.0);
+                ui.add_space(8.0);
+
+                ui.label(
+                    RichText::new(if self.is_vi {
+                        "Bản cài đặt chưa có chữ ký số (Unsigned) · Chỉ tải từ github.com/erikpuw/puwbar"
+                    } else {
+                        "Unsigned installer build · Download only from github.com/erikpuw/puwbar"
+                    })
+                    .size(11.0)
+                    .color(muted),
+                );
+
+                ui.add_space(6.0);
 
                 if !self.message.is_empty() {
                     let color = match self.status {
@@ -261,14 +273,16 @@ impl eframe::App for InstallerApp {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                         } else {
-                            let primary_txt = match (self.mode, self.is_vi) {
-                                (Mode::Install, true) => "Cài đặt",
-                                (Mode::Install, false) => "Install",
-                                (Mode::Uninstall, true) => "Gỡ cài đặt",
-                                (Mode::Uninstall, false) => "Uninstall",
+                            let primary_txt = match (self.mode, self.is_vi, self.enable_startup_task) {
+                                (Mode::Install, true, true) => "Cài đặt (UAC)",
+                                (Mode::Install, true, false) => "Cài đặt",
+                                (Mode::Install, false, true) => "Install (UAC)",
+                                (Mode::Install, false, false) => "Install",
+                                (Mode::Uninstall, true, _) => "Gỡ cài đặt",
+                                (Mode::Uninstall, false, _) => "Uninstall",
                             };
                             if ui
-                                .add_sized([120.0, 32.0], egui::Button::new(primary_txt))
+                                .add_sized([132.0, 32.0], egui::Button::new(primary_txt))
                                 .clicked()
                             {
                                 match self.mode {
@@ -417,7 +431,7 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("{APP_NAME} v{APP_VERSION} Setup"))
             .with_icon(Arc::new(load_window_icon()))
-            .with_inner_size(Vec2::new(540.0, 425.0))
+            .with_inner_size(Vec2::new(540.0, 455.0))
             .with_resizable(false),
         centered: true,
         ..Default::default()
