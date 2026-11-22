@@ -47,6 +47,26 @@ static constexpr GUID CLSID_PuwBarTap = {
 };
 
 static std::atomic<long> g_dllRefCount{0};
+static HMODULE g_hModule = nullptr;
+
+// Reads the shared 1-byte toggle file next to puwbar_tap_*.dll (readable from both Explorer and UWP AppContainers).
+static bool ReadDarkTintEnabled() {
+    wchar_t modPath[MAX_PATH]{};
+    DWORD len = GetModuleFileNameW(g_hModule, modPath, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return true;
+    std::wstring path(modPath, len);
+    size_t slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return true;
+    path.resize(slash + 1);
+    path += L"puwbar_dark_tint.cfg";
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return true;
+    char ch = '1';
+    DWORD read = 0;
+    bool ok = ReadFile(h, &ch, 1, &read, nullptr) != 0 && read == 1;
+    CloseHandle(h);
+    return !ok || ch != '0';
+}
 
 struct ElementMeta {
     InstanceHandle parent = 0;
@@ -127,8 +147,17 @@ struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, ge::IGraphicsE
 
 struct ColorTintEffect : winrt::implements<ColorTintEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
     winrt::hstring m_name{L"Tint"};
-    // Premultiplied RGBA for unified 62% dark-smoke frosted glass (crisp white text even over pure #FFFFFF windows)
+    // Premultiplied RGBA: 62% dark-smoke when dark contrast tint is ON, 24% airy clear glass when OFF
     float m_color[4] = {0.028f, 0.035f, 0.052f, 0.62f};
+
+    explicit ColorTintEffect(bool darkTint) {
+        if (!darkTint) {
+            m_color[0] = 0.020f;
+            m_color[1] = 0.025f;
+            m_color[2] = 0.040f;
+            m_color[3] = 0.24f;
+        }
+    }
 
     winrt::hstring Name() const { return m_name; }
     void Name(winrt::hstring const& v) { m_name = v; }
@@ -210,9 +239,13 @@ struct CompositeEffect : winrt::implements<CompositeEffect, ge::IGraphicsEffect,
 
 struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     comp::Compositor m_compositor{nullptr};
+    bool m_darkTint = true;
 
-    explicit PuwGlassBrush(comp::Compositor compositor) : m_compositor(std::move(compositor)) {
-        FallbackColor(winrt::Windows::UI::Color{160, 14, 18, 26});
+    explicit PuwGlassBrush(comp::Compositor compositor, bool darkTint)
+        : m_compositor(std::move(compositor)), m_darkTint(darkTint) {
+        FallbackColor(darkTint
+            ? winrt::Windows::UI::Color{160, 14, 18, 26}
+            : winrt::Windows::UI::Color{90, 18, 22, 32});
     }
 
     void OnConnected() {
@@ -222,7 +255,7 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
 
                 auto blur = winrt::make_self<GaussianBlurEffect>();
                 blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
-                auto tint = winrt::make_self<ColorTintEffect>();
+                auto tint = winrt::make_self<ColorTintEffect>(m_darkTint);
                 auto composite = winrt::make_self<CompositeEffect>();
                 composite->m_src0 = blur.as<ge::IGraphicsEffectSource>();
                 composite->m_src1 = tint.as<ge::IGraphicsEffectSource>();
@@ -248,18 +281,21 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
 };
 
 static media::Brush MakePuwGlass(xaml::DependencyObject const& obj) {
+    bool darkTint = ReadDarkTintEnabled();
     try {
         if (auto el = obj.try_as<xaml::UIElement>()) {
             auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
             if (visual) {
                 if (auto compositor = visual.Compositor()) {
-                    return winrt::make<PuwGlassBrush>(compositor);
+                    return winrt::make<PuwGlassBrush>(compositor, darkTint);
                 }
             }
         }
     } catch (...) {
     }
-    return media::SolidColorBrush(winrt::Windows::UI::Color{160, 14, 18, 26});
+    return media::SolidColorBrush(darkTint
+        ? winrt::Windows::UI::Color{160, 14, 18, 26}
+        : winrt::Windows::UI::Color{90, 18, 22, 32});
 }
 
 static media::SolidColorBrush MakePuwBorder() {
@@ -858,14 +894,21 @@ private:
             return;
         }
 
-        // 5b. Dark-smoke tint on System Tray right-click MenuFlyoutPresenter's existing AcrylicBrush in-place (keeps native click hit-testing intact)
+        // 5b. Adjust System Tray right-click MenuFlyoutPresenter's existing AcrylicBrush in-place (keeps native click hit-testing intact)
         if (type == L"Windows.UI.Xaml.Controls.MenuFlyoutPresenter") {
+            bool darkTint = ReadDarkTintEnabled();
             try {
                 if (auto ctrl = obj.try_as<controls::Control>()) {
                     if (auto ac = ctrl.Background().try_as<media::AcrylicBrush>()) {
-                        ac.TintColor(winrt::Windows::UI::Color{255, 14, 18, 26});
-                        ac.TintOpacity(0.62);
-                        ac.TintLuminosityOpacity(0.65);
+                        if (darkTint) {
+                            ac.TintColor(winrt::Windows::UI::Color{255, 14, 18, 26});
+                            ac.TintOpacity(0.62);
+                            ac.TintLuminosityOpacity(0.65);
+                        } else {
+                            ac.TintColor(winrt::Windows::UI::Color{255, 24, 30, 44});
+                            ac.TintOpacity(0.18);
+                            ac.TintLuminosityOpacity(0.22);
+                        }
                     }
                 }
             } catch (...) {
@@ -1125,14 +1168,29 @@ private:
     }
 
     void StartWatcher() {
-        // Taskbar alignment/position registry watcher is only needed inside explorer.exe.
+        StopWatcher();
+        m_stopWatcher.store(false);
+        // Inside auxiliary UWP hosts (Quick Settings, Notifications/Calendar, Start Menu),
+        // only poll the shared dark-tint toggle file so live tray toggles apply without restarting hosts.
         if (GetModuleHandleW(L"ShellExperienceHost.exe") != nullptr
             || GetModuleHandleW(L"ShellHost.exe") != nullptr
             || GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr) {
+            AddRef();
+            m_watcher = std::thread([this]() {
+                bool lastDarkTint = ReadDarkTintEnabled();
+                while (!m_stopWatcher.load()) {
+                    Sleep(350);
+                    if (m_stopWatcher.load()) break;
+                    bool cur = ReadDarkTintEnabled();
+                    if (cur != lastDarkTint) {
+                        lastDarkTint = cur;
+                        DispatchReload();
+                    }
+                }
+                Release();
+            });
             return;
         }
-        StopWatcher();
-        m_stopWatcher.store(false);
         AddRef();
         m_watcher = std::thread([this]() {
             HANDLE stopEv = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\PuwBar.StopEvent");
@@ -1313,6 +1371,9 @@ extern "C" HRESULT __stdcall DllCanUnloadNow() {
     return g_dllRefCount.load(std::memory_order_acquire) == 0 ? S_OK : S_FALSE;
 }
 
-BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) {
+BOOL APIENTRY DllMain(HMODULE hMod, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        g_hModule = hMod;
+    }
     return TRUE;
 }

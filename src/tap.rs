@@ -38,10 +38,12 @@ const CMD_LANG_VI: u32 = 1003;
 const CMD_LANG_EN: u32 = 1004;
 const CMD_ABOUT: u32 = 1005;
 const CMD_EXIT: u32 = 1006;
+const CMD_DARK_TINT: u32 = 1007;
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "PuwBar";
 const APP_KEY: &str = "Software\\PuwBar";
 const LANG_VALUE: &str = "Language";
+const DARK_TINT_VALUE: &str = "DarkTint";
 const TASK_NAME: &str = "PuwBar";
 const STOP_EVENT_NAME: &str = "Local\\PuwBar.StopEvent";
 const READY_EVENT_NAME: &str = "Local\\PuwBar.TapReady";
@@ -109,6 +111,64 @@ unsafe fn save_lang(lang: Lang) {
         (val.len() * size_of::<u16>()) as u32,
     );
     RegCloseKey(hkey);
+}
+
+fn dark_tint_cfg_byte(enabled: bool) -> &'static [u8] {
+    if enabled { b"1" } else { b"0" }
+}
+
+fn sync_dark_tint_file(enabled: bool) {
+    let cfg = std::env::temp_dir().join("puwbar_dark_tint.cfg");
+    let existed = cfg.exists();
+    if std::fs::write(&cfg, dark_tint_cfg_byte(enabled)).is_ok() && !existed {
+        grant_appcontainer_read(&cfg);
+    }
+}
+
+unsafe fn read_dark_tint() -> bool {
+    let mut val = 1u32;
+    let mut bytes = size_of::<u32>() as u32;
+    let ok = RegGetValueW(
+        HKEY_CURRENT_USER,
+        wide(APP_KEY).as_ptr(),
+        wide(DARK_TINT_VALUE).as_ptr(),
+        RRF_RT_REG_DWORD,
+        null_mut(),
+        (&raw mut val).cast(),
+        &mut bytes,
+    ) == 0;
+    if !ok {
+        return true;
+    }
+    val != 0
+}
+
+unsafe fn save_dark_tint(enabled: bool) {
+    let mut hkey = null_mut();
+    if RegCreateKeyExW(
+        HKEY_CURRENT_USER,
+        wide(APP_KEY).as_ptr(),
+        0,
+        null(),
+        0,
+        KEY_SET_VALUE,
+        null(),
+        &mut hkey,
+        null_mut(),
+    ) == 0
+    {
+        let val = u32::from(enabled);
+        RegSetValueExW(
+            hkey,
+            wide(DARK_TINT_VALUE).as_ptr(),
+            0,
+            REG_DWORD,
+            (&raw const val).cast(),
+            size_of::<u32>() as u32,
+        );
+        RegCloseKey(hkey);
+    }
+    sync_dark_tint_file(enabled);
 }
 
 type InitXamlDiagExFn = unsafe extern "system" fn(
@@ -596,9 +656,11 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     }
     let lang = read_lang();
     let autostart = is_autostart_enabled();
-    let (lbl_auto, lbl_reapply, lbl_lang, lbl_about, lbl_exit) = match lang {
+    let dark_tint = read_dark_tint();
+    let (lbl_auto, lbl_dark, lbl_reapply, lbl_lang, lbl_about, lbl_exit) = match lang {
         Lang::Vi => (
             "Khởi động cùng Windows",
+            "Phủ nền tối tăng tương phản",
             "Áp dụng lại giao diện",
             "Ngôn ngữ",
             "Giới thiệu PuwBar",
@@ -606,6 +668,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         ),
         Lang::En => (
             "Start with Windows",
+            "Dark contrast tint",
             "Reapply taskbar glass",
             "Language",
             "About PuwBar",
@@ -617,6 +680,12 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         MF_STRING | if autostart { MF_CHECKED } else { MF_UNCHECKED },
         CMD_AUTOSTART as usize,
         wide(lbl_auto).as_ptr(),
+    );
+    AppendMenuW(
+        menu,
+        MF_STRING | if dark_tint { MF_CHECKED } else { MF_UNCHECKED },
+        CMD_DARK_TINT as usize,
+        wide(lbl_dark).as_ptr(),
     );
     AppendMenuW(
         menu,
@@ -676,6 +745,13 @@ unsafe fn show_tray_menu(hwnd: HWND) {
 
     match choice {
         CMD_AUTOSTART => set_autostart(!autostart),
+        CMD_DARK_TINT => {
+            save_dark_tint(!dark_tint);
+            let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
+            if !reload.is_null() {
+                SetEvent(reload);
+            }
+        }
         CMD_REAPPLY => {
             let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
             if !reload.is_null() {
@@ -791,6 +867,9 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
             ShowWindow(tray, SW_SHOWNA);
         }
 
+        // Sync persisted dark-tint toggle for both Explorer and AppContainer hosts before attaching.
+        sync_dark_tint_file(read_dark_tint());
+
         // Boost priority during initial attach so PuwBar styles Explorer as soon as XAML initializes.
         let proc = GetCurrentProcess();
         SetPriorityClass(proc, ABOVE_NORMAL_PRIORITY_CLASS);
@@ -893,5 +972,11 @@ mod tests {
         assert_eq!(parse_lang("EN"), Lang::En);
         assert_eq!(parse_lang("vi"), Lang::Vi);
         assert_eq!(parse_lang(""), Lang::Vi);
+    }
+
+    #[test]
+    fn dark_tint_cfg_encodes_boolean_flag() {
+        assert_eq!(dark_tint_cfg_byte(true), b"1");
+        assert_eq!(dark_tint_cfg_byte(false), b"0");
     }
 }
