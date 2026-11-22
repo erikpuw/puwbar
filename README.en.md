@@ -11,14 +11,7 @@
   Written in Rust + C++/WinRT, ~750 KB Windows installer, no Windhawk, no Visual C++ Redistributable required.
 </p>
 
-<p align="center">
-  <a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puwbar/releases/latest">Latest release</a>
-</p>
-<p align="center">
-  <a href="https://github.com/erikpuw/puwbar/releases/latest">
-    <img src="https://img.shields.io/github/v/release/erikpuw/puwbar?label=Latest&color=2563eb" alt="Latest release">
-  </a>
-</p>
+<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puwbar/releases/latest"><img src="https://img.shields.io/github/v/release/erikpuw/puwbar?label=Latest" alt="Latest release" valign="middle"></a></p>
 
 > **Download only from the author's source.** PuwBar is published by its author (erikpuw) only at [github.com/erikpuw/puwbar](https://github.com/erikpuw/puwbar). A copy from anywhere else (file-sharing sites, other repositories, repackaged builds, files sent over the internet) is not controlled by the author and comes with no guarantee: it may have been modified or had code added. Use only the build in this repository's [Releases](https://github.com/erikpuw/puwbar/releases).
 
@@ -49,7 +42,7 @@
 ## Install & usage
 
 1. If an older copy of PuwBar is currently running, exit it first (`Ctrl+Alt+F12` or **Exit PuwBar** in the System Tray).
-2. Download `puwbar-setup-v<version>-x64.exe` (~750 KB) from [Releases (Latest)](https://github.com/erikpuw/puwbar/releases/latest) and run it.
+2. Download `puwbar-setup-v<version>-x64.exe` (~750 KB) from [Releases](https://github.com/erikpuw/puwbar/releases/latest) and run it.
 3. The installer installs `puwbar.exe` into `%LOCALAPPDATA%\Programs\PuwBar`, creates the Start Menu shortcut, and registers an entry in Windows **Installed apps** for clean removal.
 4. With **Start with Windows at logon** checked, Windows prompts for Administrator UAC to register a zero-delay Task Scheduler logon task (`HighestAvailable`). Declining UAC falls back to standard `HKCU\...\Run`.
 5. Click the PuwBar icon in the System Tray to change glass contrast, toggle individual surfaces, or switch language. Press `Ctrl+Alt+F12` or pick **Exit PuwBar** to restore the default taskbar without restarting Explorer.
