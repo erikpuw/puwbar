@@ -653,6 +653,35 @@ private:
         }
     }
 
+    void StyleNativeAcrylicInPlace(media::AcrylicBrush const& ac, int level) {
+        try {
+            {
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_savedAcrylics.push_back(SavedAcrylic{
+                    winrt::make_weak(ac),
+                    ac.TintColor(),
+                    ac.TintOpacity(),
+                    ac.TintLuminosityOpacity(),
+                });
+            }
+            ac.AlwaysUseFallback(false);
+            if (level == 0) {
+                ac.TintColor(winrt::Windows::UI::Color{255, 24, 30, 44});
+                ac.TintOpacity(0.18);
+                ac.TintLuminosityOpacity(0.22);
+            } else if (level == 1) {
+                ac.TintColor(winrt::Windows::UI::Color{255, 18, 24, 36});
+                ac.TintOpacity(0.40);
+                ac.TintLuminosityOpacity(0.42);
+            } else {
+                ac.TintColor(winrt::Windows::UI::Color{255, 14, 18, 26});
+                ac.TintOpacity(0.62);
+                ac.TintLuminosityOpacity(0.65);
+            }
+        } catch (...) {
+        }
+    }
+
     void LockGlassBackground(xaml::DependencyObject const& obj, xaml::DependencyProperty const& prop) {
         try {
             auto token = obj.RegisterPropertyChangedCallback(
@@ -944,28 +973,7 @@ private:
             try {
                 if (auto ctrl = obj.try_as<controls::Control>()) {
                     if (auto ac = ctrl.Background().try_as<media::AcrylicBrush>()) {
-                        {
-                            std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                            m_savedAcrylics.push_back(SavedAcrylic{
-                                winrt::make_weak(ac),
-                                ac.TintColor(),
-                                ac.TintOpacity(),
-                                ac.TintLuminosityOpacity(),
-                            });
-                        }
-                        if (level == 0) {
-                            ac.TintColor(winrt::Windows::UI::Color{255, 24, 30, 44});
-                            ac.TintOpacity(0.18);
-                            ac.TintLuminosityOpacity(0.22);
-                        } else if (level == 1) {
-                            ac.TintColor(winrt::Windows::UI::Color{255, 18, 24, 36});
-                            ac.TintOpacity(0.40);
-                            ac.TintLuminosityOpacity(0.42);
-                        } else {
-                            ac.TintColor(winrt::Windows::UI::Color{255, 14, 18, 26});
-                            ac.TintOpacity(0.62);
-                            ac.TintLuminosityOpacity(0.65);
-                        }
+                        StyleNativeAcrylicInPlace(ac, level);
                     }
                 }
             } catch (...) {
@@ -1009,16 +1017,32 @@ private:
             return;
         }
 
-        // 5e. Glass for Taskbar Jump Lists & Start Menu (individually toggleable; locked against VisualState resets)
+        // 5e. Taskbar Jump Lists: tune native AcrylicBrush in-place so blur stays alive during slide-up/slide-down transitions
         if (name == L"JumpListRestyledAcrylic"
             || name == L"SystemItemsAcrylic"
-            || name == L"JumpListAcrylic"
-            || (name == L"AcrylicBorder" && GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr)) {
-            uint32_t surfaces = ReadGlassConfig().surfaces;
-            bool enabled = (name == L"AcrylicBorder")
-                ? ((surfaces & SURF_START_MENU) != 0)
-                : ((surfaces & SURF_JUMP_LIST) != 0);
-            if (enabled) {
+            || name == L"JumpListAcrylic") {
+            GlassConfig cfg = ReadGlassConfig();
+            if ((cfg.surfaces & SURF_JUMP_LIST) != 0) {
+                try {
+                    if (auto bd = obj.try_as<controls::Border>()) {
+                        if (auto ac = bd.Background().try_as<media::AcrylicBrush>()) {
+                            StyleNativeAcrylicInPlace(ac, cfg.level);
+                        } else {
+                            SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
+                        }
+                    }
+                } catch (...) {
+                }
+                SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
+                SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
+                SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            }
+            return;
+        }
+
+        // 5f. Start Menu: frosted glass on AcrylicBorder (keeps native two-tone AcrylicOverlay intact)
+        if (name == L"AcrylicBorder" && GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr) {
+            if ((ReadGlassConfig().surfaces & SURF_START_MENU) != 0) {
                 SaveAndSet(obj, controls::Border::BackgroundProperty(), MakePuwGlass(obj));
                 LockGlassBackground(obj, controls::Border::BackgroundProperty());
                 SaveAndSet(obj, controls::Border::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
