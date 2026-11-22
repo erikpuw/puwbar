@@ -11,7 +11,7 @@
   Viết bằng Rust + C++/WinRT, một file exe ~870 KB duy nhất, không cần Windhawk, không cần cài Visual C++ Redistributable.
 </p>
 
-<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puwbar/releases">Bản mới nhất: v1.0.5</a></p>
+<p align="center"><b>Tiếng Việt</b> · <a href="README.en.md">English</a> · <a href="https://github.com/erikpuw/puwbar/releases">Bản mới nhất: v1.0.6</a></p>
 
 > **Chỉ tải từ nguồn của tác giả.** PuwBar do tác giả (erikpuw) phát hành duy nhất tại [github.com/erikpuw/puwbar](https://github.com/erikpuw/puwbar). Bản tải từ nơi khác (trang chia sẻ, kho khác, bản đóng gói lại, tệp gửi qua mạng) không do tác giả kiểm soát và không được đảm bảo: có thể đã bị sửa đổi hoặc chèn thêm mã. Hãy chỉ dùng bản ở mục [Releases](https://github.com/erikpuw/puwbar/releases) của kho này.
 
@@ -41,9 +41,10 @@
 
 ## Cài đặt và dùng
 
-1. Tải `puwbar.exe` từ mục [Releases](https://github.com/erikpuw/puwbar/releases), đặt vào một thư mục cố định rồi chạy trực tiếp.
-2. Bấm vào icon PuwBar trong System Tray để bật **Khởi động cùng Windows** hoặc đổi ngôn ngữ.
-3. Nhấn `Ctrl+Alt+F12` hoặc chọn **Thoát PuwBar** ở tray để thoát và trả lại taskbar gốc mà không cần khởi động lại Explorer.
+1. Tải bộ cài `puwbar-setup-v1.0.6-x64.exe` từ mục [Releases](https://github.com/erikpuw/puwbar/releases) và chạy trực tiếp.
+2. Trình cài đặt sẽ cài `puwbar.exe` vào `%LOCALAPPDATA%\Programs\PuwBar`, tạo shortcut Start Menu và đăng ký mục gỡ cài đặt trong **Installed apps**.
+3. Nếu giữ tick **Chạy cùng Windows khi đăng nhập**, Windows sẽ hiện hộp thoại UAC xin quyền Quản trị viên để đăng ký tác vụ Task Scheduler không độ trễ (`HighestAvailable`). Từ chối UAC sẽ tự chuyển sang khởi động thường qua `HKCU\...\Run`.
+4. Bấm vào icon PuwBar ở System Tray để chỉnh độ tối lớp kính, bật/tắt từng khu vực hoặc đổi ngôn ngữ. Nhấn `Ctrl+Alt+F12` hay chọn **Thoát PuwBar** để trả lại taskbar gốc mà không cần khởi động lại Explorer.
 
 Nếu máy đang bật mod chỉnh giao diện taskbar trong Windhawk (như `Windows 11 Taskbar Styler`), nên tắt mod đó để tránh hai bên cùng ghi đè thuộc tính XAML.
 
@@ -52,12 +53,12 @@ Nếu máy đang bật mod chỉnh giao diện taskbar trong Windhawk (như `Win
 Cần Windows 11 (x64), Rust stable, MSVC Build Tools và Windows SDK (`10.0.26100.0` trở lên có `xamlom.h` và C++/WinRT).
 
 ```powershell
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo build --release
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+powershell -ExecutionPolicy Bypass -File .\scripts\build-dist.ps1
 ```
 
-File thực thi nằm tại `target\release\puwbar.exe`. `build.rs` tự biên dịch `tap/puwbar_tap.cpp` và nhúng kèm `assets/puwbar.ico`.
+Lệnh trên sẽ biên dịch `target\release\puwbar.exe`, đóng gói trình cài đặt và xuất ra `dist\puwbar-setup-v1.0.6-x64.exe`. `build.rs` tự biên dịch `tap/puwbar_tap.cpp` và nhúng kèm `assets/puwbar.ico`.
 
 ## Giấy phép
 

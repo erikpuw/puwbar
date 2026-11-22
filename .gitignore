@@ -1,6 +1,7 @@
 # Build outputs & binaries
 /target/
 /output/
+/dist/
 *.exe
 *.dll
 *.pdb

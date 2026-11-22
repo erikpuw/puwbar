@@ -1,6 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/puwbar-installer",
+]
+
 [package]
 name = "puwbar"
-version = "1.0.5"
+version = "1.0.6"
 edition = "2021"
 description = "Floating frosted glass taskbar styler for Windows 11"
 publish = false

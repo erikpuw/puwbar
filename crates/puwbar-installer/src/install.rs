@@ -1,0 +1,285 @@
+use crate::autostart::{
+    configure_autostart, remove_autostart, stop_running_puwbar, wide, AutostartOutcome,
+};
+use crate::shortcut::create_shortcut;
+use flate2::read::GzDecoder;
+use std::fs;
+use std::io::Read;
+use std::mem::size_of;
+use std::path::{Path, PathBuf};
+use std::ptr::{null, null_mut};
+use windows_sys::Win32::{
+    System::Registry::{
+        RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
+        KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
+    },
+    UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+};
+
+pub const APP_NAME: &str = "PuwBar";
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const APP_PUBLISHER: &str = "erikpuw";
+pub const APP_URL: &str = "https://github.com/erikpuw/puwbar";
+
+const PAYLOAD_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/puwbar_payload.gz"));
+const APP_ICON_ICO: &[u8] = include_bytes!("../../../assets/puwbar.ico");
+const LICENSE_TXT: &str = include_str!("../../../LICENSE");
+
+const UNINSTALL_REG_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PuwBar";
+
+pub struct InstallOptions {
+    pub install_dir: PathBuf,
+    pub create_start_menu: bool,
+    pub create_desktop: bool,
+    pub enable_startup_task: bool,
+}
+
+pub struct InstallResult {
+    pub exe_path: PathBuf,
+    pub autostart: AutostartOutcome,
+}
+
+pub fn default_install_dir() -> PathBuf {
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        PathBuf::from(local_app_data)
+            .join("Programs")
+            .join("PuwBar")
+    } else {
+        PathBuf::from(r"C:\Program Files\PuwBar")
+    }
+}
+
+pub fn start_menu_shortcut_path() -> Option<PathBuf> {
+    std::env::var("APPDATA").ok().map(|appdata| {
+        PathBuf::from(appdata)
+            .join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
+            .join("PuwBar.lnk")
+    })
+}
+
+pub fn desktop_shortcut_path() -> Option<PathBuf> {
+    std::env::var("USERPROFILE")
+        .ok()
+        .map(|home| PathBuf::from(home).join("Desktop").join("PuwBar.lnk"))
+}
+
+pub fn decompress_payload() -> Result<Vec<u8>, String> {
+    let mut decoder = GzDecoder::new(PAYLOAD_GZ);
+    let mut out = Vec::new();
+    decoder
+        .read_to_end(&mut out)
+        .map_err(|e| format!("Giải nén gói cài đặt thất bại: {e}"))?;
+    if out.is_empty() {
+        return Err("Gói cài đặt đang trống. Hãy build `puwbar` ở chế độ release trước.".into());
+    }
+    Ok(out)
+}
+
+pub fn perform_install(opts: &InstallOptions) -> Result<InstallResult, String> {
+    let exe_bytes = decompress_payload()?;
+    fs::create_dir_all(&opts.install_dir)
+        .map_err(|e| format!("Không tạo được thư mục {}: {e}", opts.install_dir.display()))?;
+
+    let target_exe = opts.install_dir.join("puwbar.exe");
+    let target_ico = opts.install_dir.join("puwbar.ico");
+    let target_license = opts.install_dir.join("LICENSE.txt");
+    let uninstaller_exe = opts.install_dir.join("puwbar-uninstall.exe");
+
+    // Stop any existing PuwBar instance cleanly so overwriting `puwbar.exe` never fails with sharing violation.
+    stop_running_puwbar(&target_exe);
+
+    fs::write(&target_exe, &exe_bytes).map_err(|e| {
+        format!("Không ghi được puwbar.exe (hãy thoát PuwBar đang chạy rồi thử lại): {e}")
+    })?;
+    fs::write(&target_ico, APP_ICON_ICO)
+        .map_err(|e| format!("Không ghi được puwbar.ico: {e}"))?;
+    let _ = fs::write(&target_license, LICENSE_TXT);
+
+    if let Ok(self_exe) = std::env::current_exe() {
+        if self_exe != uninstaller_exe {
+            let _ = fs::copy(&self_exe, &uninstaller_exe);
+        }
+    }
+
+    if opts.create_start_menu {
+        if let Some(lnk) = start_menu_shortcut_path() {
+            create_shortcut(
+                &lnk,
+                &target_exe,
+                &opts.install_dir,
+                &target_ico,
+                "PuwBar - Floating Frosted Glass Taskbar for Windows 11",
+            )?;
+        }
+    }
+
+    if opts.create_desktop {
+        if let Some(lnk) = desktop_shortcut_path() {
+            create_shortcut(
+                &lnk,
+                &target_exe,
+                &opts.install_dir,
+                &target_ico,
+                "PuwBar - Floating Frosted Glass Taskbar for Windows 11",
+            )?;
+        }
+    }
+
+    let estimated_kb = ((exe_bytes.len() as u64) / 1024).max(1) as u32;
+    register_uninstall_entry(&opts.install_dir, &target_ico, &uninstaller_exe, estimated_kb)?;
+
+    let autostart = configure_autostart(opts.enable_startup_task, &target_exe);
+
+    Ok(InstallResult {
+        exe_path: target_exe,
+        autostart,
+    })
+}
+
+pub fn perform_uninstall(install_dir: &Path) -> Result<(), String> {
+    let target_exe = install_dir.join("puwbar.exe");
+    stop_running_puwbar(&target_exe);
+    remove_autostart();
+
+    if let Some(lnk) = start_menu_shortcut_path() {
+        let _ = fs::remove_file(lnk);
+    }
+    if let Some(lnk) = desktop_shortcut_path() {
+        let _ = fs::remove_file(lnk);
+    }
+    unregister_uninstall_entry();
+
+    let _ = fs::remove_file(&target_exe);
+    let _ = fs::remove_file(install_dir.join("puwbar.ico"));
+    let _ = fs::remove_file(install_dir.join("LICENSE.txt"));
+    let _ = fs::remove_dir(install_dir);
+    Ok(())
+}
+
+pub fn launch_installed_app(exe_path: &Path) {
+    let op = wide("open");
+    let file = wide(&exe_path.to_string_lossy());
+    unsafe {
+        ShellExecuteW(
+            null_mut(),
+            op.as_ptr(),
+            file.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+fn reg_set_sz(hkey: HKEY, name: &str, value: &str) -> Result<(), String> {
+    let name_w = wide(name);
+    let val_w = wide(value);
+    let status = unsafe {
+        RegSetValueExW(
+            hkey,
+            name_w.as_ptr(),
+            0,
+            REG_SZ,
+            val_w.as_ptr().cast(),
+            (val_w.len() * size_of::<u16>()) as u32,
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(format!("RegSetValueExW({name}) failed: {status}"))
+    }
+}
+
+fn reg_set_dword(hkey: HKEY, name: &str, value: u32) -> Result<(), String> {
+    let name_w = wide(name);
+    let bytes = value.to_le_bytes();
+    let status = unsafe {
+        RegSetValueExW(
+            hkey,
+            name_w.as_ptr(),
+            0,
+            REG_DWORD,
+            bytes.as_ptr(),
+            bytes.len() as u32,
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(format!("RegSetValueExW({name}) failed: {status}"))
+    }
+}
+
+fn register_uninstall_entry(
+    install_dir: &Path,
+    icon_path: &Path,
+    uninstaller_exe: &Path,
+    estimated_kb: u32,
+) -> Result<(), String> {
+    let subkey = wide(UNINSTALL_REG_SUBKEY);
+    let mut hkey: HKEY = null_mut();
+    let status = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            null(),
+            &mut hkey,
+            null_mut(),
+        )
+    };
+    if status != 0 {
+        return Err(format!("RegCreateKeyExW failed: {status}"));
+    }
+
+    let uninstall_cmd = format!("\"{}\" --uninstall", uninstaller_exe.display());
+    let res = (|| {
+        reg_set_sz(hkey, "DisplayName", APP_NAME)?;
+        reg_set_sz(hkey, "DisplayVersion", APP_VERSION)?;
+        reg_set_sz(hkey, "Publisher", APP_PUBLISHER)?;
+        reg_set_sz(hkey, "URLInfoAbout", APP_URL)?;
+        reg_set_sz(hkey, "DisplayIcon", &icon_path.display().to_string())?;
+        reg_set_sz(hkey, "InstallLocation", &install_dir.display().to_string())?;
+        reg_set_sz(hkey, "UninstallString", &uninstall_cmd)?;
+        reg_set_dword(hkey, "NoModify", 1)?;
+        reg_set_dword(hkey, "NoRepair", 1)?;
+        reg_set_dword(hkey, "EstimatedSize", estimated_kb)?;
+        Ok(())
+    })();
+
+    unsafe {
+        RegCloseKey(hkey);
+    }
+    res
+}
+
+fn unregister_uninstall_entry() {
+    let subkey = wide(UNINSTALL_REG_SUBKEY);
+    unsafe {
+        RegDeleteTreeW(HKEY_CURRENT_USER, subkey.as_ptr());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_install_dir_ends_with_puwbar() {
+        let dir = default_install_dir();
+        assert_eq!(dir.file_name().and_then(|n| n.to_str()), Some("PuwBar"));
+    }
+
+    #[test]
+    fn embedded_icon_is_valid_ico_header() {
+        assert!(APP_ICON_ICO.len() > 22);
+        assert_eq!(&APP_ICON_ICO[0..4], &[0, 0, 1, 0]);
+    }
+}

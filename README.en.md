@@ -11,7 +11,7 @@
   Written in Rust + C++/WinRT, single ~870 KB exe, no Windhawk, no Visual C++ Redistributable to install.
 </p>
 
-<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puwbar/releases">Latest: v1.0.5</a></p>
+<p align="center"><a href="README.md">Tiếng Việt</a> · <b>English</b> · <a href="https://github.com/erikpuw/puwbar/releases">Latest: v1.0.6</a></p>
 
 > **Download only from the author's source.** PuwBar is published by its author (erikpuw) only at [github.com/erikpuw/puwbar](https://github.com/erikpuw/puwbar). A copy from anywhere else (file-sharing sites, other repositories, repackaged builds, files sent over the internet) is not controlled by the author and comes with no guarantee: it may have been modified or had code added. Use only the build in this repository's [Releases](https://github.com/erikpuw/puwbar/releases).
 
@@ -39,11 +39,12 @@
 | ![Start button Win+X menu](assets/screenshots/start-context-menu.jpg)<br>**Win+X Menu**: Start button context menu | ![System Tray context menu](assets/screenshots/tray-context-menu.png)<br>**System Tray Menu**: native left-click selection preserved |
 | ![PuwBar tray menu English](assets/screenshots/tray-en.png)<br>**PuwBar Menu (English)**: glass contrast presets & per-surface toggles | ![PuwBar tray menu Vietnamese](assets/screenshots/tray-vi.png)<br>**PuwBar Menu (Vietnamese)**: switch language directly from the tray |
 
-## Usage
+## Install & usage
 
-1. Download `puwbar.exe` from [Releases](https://github.com/erikpuw/puwbar/releases), put it in a permanent folder, and run it.
-2. Click the PuwBar icon in the System Tray to turn on **Start with Windows** or switch language.
-3. Press `Ctrl+Alt+F12` or pick **Exit PuwBar** in the tray menu to restore the default taskbar without restarting Explorer.
+1. Download `puwbar-setup-v1.0.6-x64.exe` from [Releases](https://github.com/erikpuw/puwbar/releases) and run it.
+2. The installer installs `puwbar.exe` into `%LOCALAPPDATA%\Programs\PuwBar`, creates the Start Menu shortcut, and registers an entry in Windows **Installed apps** for clean removal.
+3. With **Start with Windows at logon** checked, Windows prompts for Administrator UAC to register a zero-delay Task Scheduler logon task (`HighestAvailable`). Declining UAC falls back to standard `HKCU\...\Run`.
+4. Click the PuwBar icon in the System Tray to change glass contrast, toggle individual surfaces, or switch language. Press `Ctrl+Alt+F12` or pick **Exit PuwBar** to restore the default taskbar without restarting Explorer.
 
 If a taskbar styling mod is active in Windhawk (such as `Windows 11 Taskbar Styler`), disable it before running PuwBar so both do not overwrite the same XAML elements.
 
@@ -52,12 +53,12 @@ If a taskbar styling mod is active in Windhawk (such as `Windows 11 Taskbar Styl
 Requires Windows 11 (x64), Rust stable, MSVC Build Tools, and Windows SDK (`10.0.26100.0` or newer with `xamlom.h` and C++/WinRT).
 
 ```powershell
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo build --release
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+powershell -ExecutionPolicy Bypass -File .\scripts\build-dist.ps1
 ```
 
-The standalone binary is written to `target\release\puwbar.exe`. `build.rs` compiles `tap/puwbar_tap.cpp` and embeds `assets/puwbar.ico` automatically.
+This builds `target\release\puwbar.exe`, embeds it into the native setup binary, and writes `dist\puwbar-setup-v1.0.6-x64.exe`. `build.rs` compiles `tap/puwbar_tap.cpp` and embeds `assets/puwbar.ico` automatically.
 
 ## License
 
