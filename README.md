@@ -19,7 +19,7 @@
 
 | Tính năng | Làm gì |
 |---|---|
-| **Kính mờ thật** | Làm mờ nền phía sau theo thời gian thực qua `Windows.UI.Composition` (`CreateBackdropBrush` + `D2D1GaussianBlur`), viền kính `1px` sáng ở mép trên, tối dần ở hai cạnh để tạo độ dày, kèm bóng nổi `ThemeShadow`, bo góc 12px. |
+| **Kính mờ thật** | Làm mờ nền phía sau theo thời gian thực, viền kính bắt sáng, bóng đổ nhẹ và bo góc 12px. Có bốn kiểu giao diện để chọn. |
 | **Giữ nguyên bản gốc** | Không ẩn hay thay thế Explorer. Giữ đủ animation tray (RunCat 365, UniKey), menu chuột phải gốc, lưới icon overflow, Start menu và xem trước cửa sổ. |
 | **Đủ 4 cạnh & Left/Center** | Tự xoay bố cục theo thời gian thực khi đổi vị trí taskbar (**Bottom / Top / Left / Right**) hoặc căn lề (**Left / Center**) trong Windows Settings. |
 | **Sửa vạch cạnh phải** | Khóa đúng vạch đánh dấu ứng dụng đang chạy về cạnh phải khi đặt taskbar dọc bên phải màn hình. |
@@ -43,19 +43,19 @@
 
 Chọn trong menu tray, mục **Kiểu giao diện**.
 
-**Kính mờ** (mặc định): nền phía sau nhòe nhẹ nhưng vẫn thấy hình khối, mặt kính có vệt bóng loáng nên nhìn ra tấm kính nổi khối.
+**Kính mờ** (mặc định): nền nhòe nhẹ, vẫn thấy hình khối phía sau, mặt kính có ánh bóng.
 
 ![Kiểu Kính mờ](assets/screenshots/style-frosted.png)
 
-**Kính trong suốt**: không làm mờ nền, chỉ giữ viền kính và vệt bóng mềm.
+**Kính trong suốt**: nền giữ nguyên, chỉ có viền kính và ánh bóng.
 
 ![Kiểu Kính trong suốt](assets/screenshots/style-crystal-clear.png)
 
-**Không viền (phản chiếu icon)**: bỏ khung kính, icon in bóng xuống phía dưới như đặt trên mặt bàn kính.
+**Không viền (phản chiếu icon)**: không có khung, icon phản chiếu xuống dưới như đặt trên mặt bàn kính.
 
 ![Kiểu Không viền phản chiếu icon](assets/screenshots/style-borderless.png)
 
-**Kính mờ phẳng**: giao diện kính của v1.0.7, viền bắt sáng mảnh 0.65px, không bóng đổ, không vệt bóng loáng.
+**Kính mờ phẳng**: giao diện của v1.0.7, viền mảnh, không bóng đổ.
 
 ![Kiểu Kính mờ phẳng](assets/screenshots/style-flat-frosted.png)
 

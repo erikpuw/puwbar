@@ -19,7 +19,7 @@
 
 | Feature | What it does |
 |---|---|
-| **Real frosted glass** | Real-time backdrop blur via `Windows.UI.Composition` (`CreateBackdropBrush` + `D2D1GaussianBlur`), `1px` glass rim that is bright on top and darker along the sides to suggest thickness, `ThemeShadow` depth, 12px rounded corners. |
+| **Real frosted glass** | Real-time blur of whatever is behind the bar, a glass rim that catches the light, a soft shadow, and 12px rounded corners. Four styles to choose from. |
 | **Native behavior intact** | Never hides or replaces Explorer. Keeps live tray animations (RunCat 365, UniKey), native right-click menus, the overflow icon grid, Start menu, and window previews. |
 | **All 4 edges & Left/Center** | Adapts live when switching taskbar position (**Bottom / Top / Left / Right**) or alignment (**Left / Center**) in Windows Settings. |
 | **Right-edge indicator fix** | Keeps the running-app indicator locked to the right edge on vertical right-docked taskbars. |
@@ -43,19 +43,19 @@
 
 Pick one from the tray menu under **Taskbar style**.
 
-**Frosted Glass** (default): the wallpaper behind is softly blurred but its shapes still show through, and a soft sheen on the surface makes it read as a raised glass slab.
+**Frosted Glass** (default): a light blur that still lets shapes show through, with a sheen on the glass.
 
 ![Frosted Glass style](assets/screenshots/style-frosted.png)
 
-**Crystal Clear**: no blur, just the glass rim and a soft sheen.
+**Crystal Clear**: no blur, just a glass rim and a sheen.
 
 ![Crystal Clear style](assets/screenshots/style-crystal-clear.png)
 
-**Borderless (icon reflection)**: no glass frame; icons cast a reflection below them, as if standing on a glass table.
+**Borderless (icon reflection)**: no frame; icons reflect downward as if standing on a glass table.
 
 ![Borderless icon reflection style](assets/screenshots/style-borderless.png)
 
-**Flat Frosted**: the v1.0.7 glass look, with a thin 0.65px catch-light rim, no drop shadow, and no sheen.
+**Flat Frosted**: the v1.0.7 look, with a thin rim and no shadow.
 
 ![Flat Frosted style](assets/screenshots/style-flat-frosted.png)
 

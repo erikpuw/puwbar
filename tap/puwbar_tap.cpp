@@ -1623,7 +1623,8 @@ private:
     void SoftenFlyoutShadow(xaml::DependencyObject const& obj) {
         // Some hosts (e.g. Start's #StartDropShadow) cast the shadow from a sibling, so each
         // ancestor's direct children are checked too.
-        constexpr float kMaxFlyoutShadowZ = 6.0f;
+        // Soft enough to read as a shadow, low enough that its blur stays above the taskbar edge.
+        constexpr float kMaxFlyoutShadowZ = 16.0f;
         auto cap = [&](xaml::DependencyObject const& o) {
             auto el = o.try_as<xaml::UIElement>();
             if (!el || !el.Shadow()) return;
