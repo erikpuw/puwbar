@@ -57,6 +57,8 @@ Pick one from the tray menu under **Taskbar style**.
 
 **Flat Frosted**: the v1.0.6 glass look, with an even thin white rim, no drop shadow, and no sheen.
 
+![Flat Frosted style](assets/screenshots/style-flat-frosted.png)
+
 ## Install & usage
 
 1. If an older copy of PuwBar is currently running, exit it first (`Ctrl+Alt+F12` or **Exit PuwBar** in the System Tray).

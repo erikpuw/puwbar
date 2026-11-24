@@ -57,6 +57,8 @@ Chọn trong menu tray, mục **Kiểu giao diện**.
 
 **Kính mờ phẳng**: giao diện kính của v1.0.6, viền trắng mảnh đều, không bóng đổ, không vệt bóng loáng.
 
+![Kiểu Kính mờ phẳng](assets/screenshots/style-flat-frosted.png)
+
 ## Cài đặt và dùng
 
 1. Nếu đang chạy bản PuwBar cũ, hãy thoát trước khi cài (`Ctrl+Alt+F12` hoặc chọn **Thoát PuwBar** ở System Tray).
