@@ -1141,7 +1141,8 @@ private:
                 return true;
             }
 
-            float iconSliceH = 18.0f;
+            // Tray icons are 16px; a taller slice mirrors blank rows and pushes the reflection away.
+            float iconSliceH = 16.0f;
             float iconTop = (rh - iconSliceH) * 0.5f;
             if (iconTop < 0.0f) iconTop = 0.0f;
 
