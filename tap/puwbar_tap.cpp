@@ -24,6 +24,7 @@
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -1016,15 +1017,17 @@ private:
         comp::SpriteVisual sprite{nullptr};
     };
 
-    // Floor reflection tuning.
-    static constexpr float kReflScaleY = 0.85f;  // vertical squash of the mirrored slice
-    static constexpr float kReflIconGap = 2.5f;  // small clearance over the running-app indicator
+    // Floor reflection tuning (Leopard-dock style): the mirror is spread from the icon base down
+    // to the bottom of the taskbar frame, flattened to fit that space like a glass floor.
+    static constexpr float kReflMinScaleY = 0.30f;
+    static constexpr float kReflMaxScaleY = 0.85f;
+    static constexpr float kReflIconGap = 1.0f;  // thin air gap between icon base and its reflection
     static constexpr float kReflDateGap = 0.8f;  // clock date line has no indicator below it
 
     static ReflectionBand CreateReflectionBand(
         comp::Compositor const& compositor,
-        comp::Visual const& sourceVisual,
-        float maskEndY) {
+        comp::Visual const& sourceVisual) {
+        constexpr float maskEndY = 0.05f; // fade runs almost to the floor (screen bottom)
         auto visSurface = compositor.CreateVisualSurface();
         visSurface.SourceVisual(sourceVisual);
 
@@ -1047,7 +1050,6 @@ private:
 
         auto sprite = compositor.CreateSpriteVisual();
         sprite.Brush(maskBrush);
-        sprite.Scale(num::float3{1.0f, -kReflScaleY, 1.0f});
         return ReflectionBand{visSurface, sprite};
     }
 
@@ -1059,8 +1061,8 @@ private:
         float width,
         float sliceTop,
         float sliceH,
-        float gapPx) {
-        constexpr float scaleY = kReflScaleY;
+        float gapPx,
+        float floorY) {
         if (width <= 1.0f || sliceH <= 2.0f) {
             band.sprite.IsVisible(false);
             return;
@@ -1070,6 +1072,9 @@ private:
         band.surface.SourceSize(num::float2{width, sliceH});
         band.sprite.Size(num::float2{width, sliceH});
         float topOfRefl = basePtY + sliceTop + sliceH + gapPx;
+        float scaleY = (floorY - topOfRefl) / sliceH;
+        scaleY = std::clamp(scaleY, kReflMinScaleY, kReflMaxScaleY);
+        band.sprite.Scale(num::float3{1.0f, -scaleY, 1.0f});
         band.sprite.Offset(num::float3{basePtX + xStart, topOfRefl + sliceH * scaleY, 0.0f});
     }
 
@@ -1087,11 +1092,16 @@ private:
             if (rw < 8.0f || rh < 24.0f) return false;
 
             auto pt = stripFe.TransformToVisual(frameEl).TransformPoint(winrt::Windows::Foundation::Point{0.0f, 0.0f});
+            // Glass floor ends at the bottom of the taskbar frame (screen bottom on a bottom taskbar).
+            float floorY = 1e6f;
+            if (auto frameFe = frameEl.try_as<xaml::FrameworkElement>()) {
+                floorY = static_cast<float>(frameFe.ActualHeight());
+            }
 
             if (!isSystemTray) {
                 float iconTop = (rh - 24.0f) * 0.5f;
                 if (iconTop < 0.0f) iconTop = 0.0f;
-                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, 24.0f, kReflIconGap);
+                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, 24.0f, kReflIconGap, floorY);
                 return true;
             }
 
@@ -1104,16 +1114,16 @@ private:
             if (clk.found && clk.right > clk.left && clk.dateHeight > 4.0f) {
                 float cL = (clk.left < 0.0f) ? 0.0f : clk.left;
                 float cR = (clk.right > rw) ? rw : clk.right;
-                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, cL, iconTop, iconSliceH, kReflIconGap);
+                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, cL, iconTop, iconSliceH, kReflIconGap, floorY);
 
                 // Reflect only the bottom date line (DateInnerTextBlock) right beneath its baseline with clean air gap.
-                PlaceBand(clockBand, pt.X, pt.Y, cL, cR - cL, clk.dateTop, clk.dateHeight, kReflDateGap);
+                PlaceBand(clockBand, pt.X, pt.Y, cL, cR - cL, clk.dateTop, clk.dateHeight, kReflDateGap, floorY);
 
-                PlaceBand(rightBand, pt.X, pt.Y, cR, rw - cR, iconTop, iconSliceH, kReflIconGap);
+                PlaceBand(rightBand, pt.X, pt.Y, cR, rw - cR, iconTop, iconSliceH, kReflIconGap, floorY);
                 return true;
             }
 
-            PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, iconSliceH, kReflIconGap);
+            PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, iconSliceH, kReflIconGap, floorY);
             if (clockBand.sprite) clockBand.sprite.IsVisible(false);
             if (rightBand.sprite) rightBand.sprite.IsVisible(false);
             return false;
@@ -1141,7 +1151,7 @@ private:
             if (!compositor) return;
 
             if (!isSystemTray) {
-                auto band = CreateReflectionBand(compositor, sourceVisual, 0.40f);
+                auto band = CreateReflectionBand(compositor, sourceVisual);
                 ReflectionBand empty{};
                 UpdateStripReflectionGeometry(stripFe, stripEl, frameEl, band, empty, empty, false);
 
@@ -1172,9 +1182,9 @@ private:
 
             // System Tray: 3 independent baseline bands inside a single ContainerVisual
             auto container = compositor.CreateContainerVisual();
-            auto leftBand = CreateReflectionBand(compositor, sourceVisual, 0.25f);
-            auto clockBand = CreateReflectionBand(compositor, sourceVisual, 0.30f);
-            auto rightBand = CreateReflectionBand(compositor, sourceVisual, 0.25f);
+            auto leftBand = CreateReflectionBand(compositor, sourceVisual);
+            auto clockBand = CreateReflectionBand(compositor, sourceVisual);
+            auto rightBand = CreateReflectionBand(compositor, sourceVisual);
             container.Children().InsertAtTop(leftBand.sprite);
             container.Children().InsertAtTop(clockBand.sprite);
             container.Children().InsertAtTop(rightBand.sprite);
