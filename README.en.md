@@ -26,7 +26,7 @@
 | **Matching glass everywhere** | Styles the System Tray pill, Start Menu, tray right-click menus, taskbar Jump Lists, hover tooltips, window thumbnail previews, Quick Settings, Notification Center, Calendar, overflow flyouts (`^`, `...`), and Widgets button. |
 | **Smooth horizontal slide** | 300ms ease-in-out slide timed with Windows 11's app launch animation, VSync-locked to the monitor refresh rate. |
 | **Lightweight & clean** | About 1.2 MB of RAM and 0% CPU at idle. Installs per-user with a standard entry in Windows Installed apps; exiting restores every XAML property cleanly. |
-| **Tray menu** | Start with Windows, Glass contrast (24% / 45% / 62%), Glass surfaces (toggle each panel back to native Windows), Reapply taskbar glass, Language (Vietnamese / English), About, Exit (`Ctrl+Alt+F12`). |
+| **Tray menu** | Start with Windows, Taskbar style (Frosted Glass / Crystal Clear / Borderless with icon reflection), Glass contrast (24% / 45% / 62%), Glass surfaces (toggle each panel back to native Windows), Reapply taskbar glass, Language (Vietnamese / English), About, Exit (`Ctrl+Alt+F12`). |
 
 **Start with Windows** asks for administrator permission once to create an immediate-logon Task Scheduler task (no startup delay, retries up to 30 seconds while Explorer XAML initializes). If UAC is declined, it falls back to `HKCU\...\Run`. Untick it to turn it off.
 

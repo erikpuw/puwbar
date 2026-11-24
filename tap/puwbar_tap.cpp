@@ -58,17 +58,24 @@ static constexpr uint32_t SURF_TOOLTIP        = 1u << 5;
 static constexpr uint32_t SURF_THUMBNAIL      = 1u << 6;
 static constexpr uint32_t SURF_ALL            = 0x7Fu;
 
+static constexpr int STYLE_FROSTED_GLASS = 0; // Default v1.0.7 frosted glass
+static constexpr int STYLE_CRYSTAL_CLEAR = 1; // Transparent glass with glossy reflection
+static constexpr int STYLE_ICON_REFLECT  = 2; // Completely borderless/transparent + real icon reflection
+
 struct GlassConfig {
     int level = 2; // 0 = Light (24%), 1 = Balanced (45%), 2 = High contrast (62%)
     uint32_t surfaces = SURF_ALL;
+    int style = STYLE_FROSTED_GLASS;
     bool stop = false;
 
     uint32_t packed() const {
-        return (static_cast<uint32_t>(level) << 8) | (surfaces & SURF_ALL);
+        return (static_cast<uint32_t>(style) << 16)
+            | (static_cast<uint32_t>(level) << 8)
+            | (surfaces & SURF_ALL);
     }
 };
 
-// Reads "<level>:<hex-mask>" or "stop" from puwbar_dark_tint.cfg next to puwbar_tap_*.dll.
+// Reads "<level>:<hex-mask>[:<style>]" or "stop" from puwbar_dark_tint.cfg next to puwbar_tap_*.dll.
 static GlassConfig ReadGlassConfig() {
     GlassConfig cfg;
     wchar_t modPath[MAX_PATH]{};
@@ -81,7 +88,7 @@ static GlassConfig ReadGlassConfig() {
     path += L"puwbar_dark_tint.cfg";
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return cfg;
-    char buf[16]{};
+    char buf[24]{};
     DWORD read = 0;
     bool ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr) != 0 && read >= 1;
     CloseHandle(h);
@@ -94,8 +101,17 @@ static GlassConfig ReadGlassConfig() {
     else if (buf[0] == '1') cfg.level = 1;
     else cfg.level = 2;
     if (read >= 3 && buf[1] == ':') {
-        unsigned long mask = strtoul(buf + 2, nullptr, 16);
+        char* endPtr = nullptr;
+        unsigned long mask = strtoul(buf + 2, &endPtr, 16);
         cfg.surfaces = static_cast<uint32_t>(mask) & SURF_ALL;
+        if (endPtr && *endPtr == ':' && endPtr[1] != '\0') {
+            int parsedStyle = static_cast<int>(strtol(endPtr + 1, nullptr, 10));
+            if (parsedStyle == STYLE_CRYSTAL_CLEAR || parsedStyle == STYLE_ICON_REFLECT) {
+                cfg.style = parsedStyle;
+            } else {
+                cfg.style = STYLE_FROSTED_GLASS;
+            }
+        }
     }
     return cfg;
 }
@@ -126,11 +142,21 @@ struct SavedPropCallback {
     int64_t token = 0;
 };
 
+struct SavedSizeCallback {
+    winrt::weak_ref<xaml::FrameworkElement> target;
+    winrt::event_token token{};
+};
+
 struct SavedAcrylic {
     winrt::weak_ref<media::AcrylicBrush> brush;
     winrt::Windows::UI::Color tintColor{};
     double tintOpacity = 1.0;
     winrt::Windows::Foundation::IReference<double> tintLum{nullptr};
+};
+
+struct SavedTranslation {
+    winrt::weak_ref<xaml::UIElement> el;
+    num::float3 original{};
 };
 
 // Minimal D2D1 effect wrappers for always-on fast Backdrop Gaussian blur + glass tint.
@@ -363,6 +389,82 @@ static media::LinearGradientBrush MakePuwSpecularRim() {
     addStop(0.88, 33); // ~13% lower curve
     addStop(1.00, 51); // ~20% soft bottom bounce
     return rim;
+}
+
+static media::LinearGradientBrush MakeCrystalClearBackground() {
+    // Fully transparent (zero blur) with a classic glossy reflection band across the upper glass plane
+    // and a subtle specular sheen along the bottom shelf edge.
+    media::LinearGradientBrush bg;
+    bg.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
+    bg.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
+
+    auto addStop = [&](double offset, uint8_t a) {
+        media::GradientStop stop;
+        stop.Offset(offset);
+        stop.Color(winrt::Windows::UI::Color{a, 255, 255, 255});
+        bg.GradientStops().Append(stop);
+    };
+    addStop(0.00, 48); // ~19% top crystal reflection sheen
+    addStop(0.42, 14); // ~5% smooth glossy upper half
+    addStop(0.46, 0);  // 0% crisp reflection split (completely transparent core)
+    addStop(0.84, 5);  // ~2% nearly invisible lower clear glass
+    addStop(1.00, 28); // ~11% soft bottom shelf reflection
+    return bg;
+}
+
+static media::LinearGradientBrush MakeCrystalClearRim() {
+    // Crisp hairline rim tailored for fully transparent glass so pill bounds remain legible.
+    media::LinearGradientBrush rim;
+    rim.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
+    rim.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
+
+    auto addStop = [&](double offset, uint8_t a) {
+        media::GradientStop stop;
+        stop.Offset(offset);
+        stop.Color(winrt::Windows::UI::Color{a, 255, 255, 255});
+        rim.GradientStops().Append(stop);
+    };
+    addStop(0.00, 104); // ~41% bright crystal top edge
+    addStop(0.20, 40);  // ~16% shoulder
+    addStop(0.55, 34);  // ~13% clean side contour
+    addStop(0.88, 42);  // ~16% lower curve
+    addStop(1.00, 68);  // ~27% reflective bottom rim
+    return rim;
+}
+
+static media::Brush MakeTaskbarPillBackground(xaml::DependencyObject const& obj, int style) {
+    if (style == STYLE_ICON_REFLECT) {
+        return media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
+    }
+    if (style == STYLE_CRYSTAL_CLEAR) {
+        return MakeCrystalClearBackground();
+    }
+    return MakePuwGlass(obj);
+}
+
+static media::Brush MakeTaskbarPillBorder(int style) {
+    if (style == STYLE_ICON_REFLECT) {
+        return media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
+    }
+    if (style == STYLE_CRYSTAL_CLEAR) {
+        return MakeCrystalClearRim();
+    }
+    return MakePuwSpecularRim();
+}
+
+static xaml::Thickness TaskbarPillBorderThickness(int style) {
+    if (style == STYLE_ICON_REFLECT) {
+        return xaml::Thickness{0.0, 0.0, 0.0, 0.0};
+    }
+    double t = (style == STYLE_CRYSTAL_CLEAR) ? 0.75 : 0.65;
+    return xaml::Thickness{t, t, t, t};
+}
+
+static float TaskbarPillShadowZ(int style) {
+    // Keep elevation low: ThemeShadow blur scales with Z and gets clipped by the taskbar
+    // XAML island bounds, leaving a hard horizontal cut line at the taskbar edge.
+    if (style == STYLE_ICON_REFLECT) return 0.0f;
+    return (style == STYLE_CRYSTAL_CLEAR) ? 4.0f : 3.0f;
 }
 
 // Reads Windows 11 Taskbar alignment setting: 0 = Left/Top, 1 (default) = Center.
@@ -775,9 +877,11 @@ private:
                 // When left-aligned, Windows widens LaunchListButton (45px vs 40px); trim left padding to keep both ends visually symmetric.
                 double leftPad = startAligned ? 0.0 : 3.0;
                 setProp(controls::Grid::PaddingProperty(), winrt::box_value(xaml::Thickness{leftPad, 0.0, 3.0, 0.0}));
-                setProp(
-                    xaml::FrameworkElement::MarginProperty(),
-                    winrt::box_value(edge == TaskbarEdge::Top ? xaml::Thickness{0.0, 4.0, 0.0, 2.0} : xaml::Thickness{0.0, 2.0, 0.0, 4.0}));
+                bool reflectMode = (ReadGlassConfig().style == STYLE_ICON_REFLECT) && (edge == TaskbarEdge::Bottom);
+                xaml::Thickness rootMargin = reflectMode
+                    ? xaml::Thickness{0.0, 0.0, 0.0, 6.0}
+                    : (edge == TaskbarEdge::Top ? xaml::Thickness{0.0, 4.0, 0.0, 2.0} : xaml::Thickness{0.0, 2.0, 0.0, 4.0});
+                setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(rootMargin));
             }
             return;
         }
@@ -794,9 +898,12 @@ private:
         }
 
         if (name == L"SystemTrayFrameGrid") {
+            bool reflectMode = (ReadGlassConfig().style == STYLE_ICON_REFLECT) && (edge == TaskbarEdge::Bottom);
             xaml::Thickness margin = vertical
                 ? xaml::Thickness{2.0, 0.0, 2.0, 8.0}
-                : (edge == TaskbarEdge::Top ? xaml::Thickness{0.0, 4.0, 8.0, 2.0} : xaml::Thickness{0.0, 2.0, 8.0, 4.0});
+                : (reflectMode
+                    ? xaml::Thickness{0.0, 0.0, 8.0, 6.0}
+                    : (edge == TaskbarEdge::Top ? xaml::Thickness{0.0, 4.0, 8.0, 2.0} : xaml::Thickness{0.0, 2.0, 8.0, 4.0}));
             xaml::Thickness pad = vertical
                 ? xaml::Thickness{0.0, 6.0, 0.0, 6.0}
                 : xaml::Thickness{6.0, 0.0, 6.0, 0.0};
@@ -822,9 +929,12 @@ private:
 
         if (name == L"ExperienceToggleButtonRootPanel"
             && parentType == L"Taskbar.AugmentedEntryPointButton") {
+            bool reflectMode = (ReadGlassConfig().style == STYLE_ICON_REFLECT) && (edge == TaskbarEdge::Bottom);
             xaml::Thickness margin = vertical
                 ? (edge == TaskbarEdge::Right ? xaml::Thickness{2.0, 8.0, 4.0, 0.0} : xaml::Thickness{4.0, 8.0, 2.0, 0.0})
-                : (edge == TaskbarEdge::Top ? xaml::Thickness{8.0, 4.0, 0.0, 2.0} : xaml::Thickness{8.0, 2.0, 0.0, 4.0});
+                : (reflectMode
+                    ? xaml::Thickness{8.0, 0.0, 0.0, 6.0}
+                    : (edge == TaskbarEdge::Top ? xaml::Thickness{8.0, 4.0, 0.0, 2.0} : xaml::Thickness{8.0, 2.0, 0.0, 4.0}));
             xaml::Thickness pad = vertical
                 ? xaml::Thickness{0.0, 4.0, 0.0, 4.0}
                 : xaml::Thickness{6.0, 0.0, 6.0, 0.0};
@@ -832,6 +942,270 @@ private:
             if (obj.try_as<controls::Grid>()) {
                 setProp(controls::Grid::PaddingProperty(), winrt::box_value(pad));
             }
+        }
+    }
+
+    struct ClockSpanInfo {
+        bool found = false;
+        float left = 1e9f;
+        float right = -1.0f;
+        float dateTop = 0.0f;
+        float dateHeight = 0.0f;
+    };
+
+    // Finds exact bounds of TimeInnerTextBlock & DateInnerTextBlock (verified from Windows 11 SystemTray.dll,
+    // nested ~16-18 levels deep inside SystemTrayFrameGrid -> OmniButtonRight -> ClockButton -> DateTimeIconContent).
+    static void ScanSystemTrayClock(
+        xaml::DependencyObject const& node,
+        xaml::UIElement const& trayRootEl,
+        float midlineBottomY,
+        ClockSpanInfo& info,
+        int depth = 0) {
+        if (!node || depth > 32) return;
+        try {
+            if (node.try_as<controls::TextBlock>()) {
+                if (auto fe = node.try_as<xaml::FrameworkElement>()) {
+                    double aw = fe.ActualWidth();
+                    double ah = fe.ActualHeight();
+                    if (fe.Visibility() == xaml::Visibility::Visible && aw >= 12.0 && ah >= 6.0) {
+                        auto nm = fe.Name();
+                        auto pt = fe.TransformToVisual(trayRootEl).TransformPoint(winrt::Windows::Foundation::Point{0.0f, 0.0f});
+                        float bottom = pt.Y + static_cast<float>(ah);
+                        bool isClockPart = (nm == L"DateInnerTextBlock" || nm == L"TimeInnerTextBlock" || bottom > midlineBottomY);
+                        if (isClockPart) {
+                            float l = pt.X - 3.0f;
+                            float r = pt.X + static_cast<float>(aw) + 3.0f;
+                            if (l < info.left) info.left = l;
+                            if (r > info.right) info.right = r;
+                            if (nm == L"DateInnerTextBlock" || bottom > info.dateTop + info.dateHeight) {
+                                info.dateTop = pt.Y;
+                                info.dateHeight = static_cast<float>(ah);
+                                info.found = true;
+                            }
+                        }
+                    }
+                }
+            }
+            int count = media::VisualTreeHelper::GetChildrenCount(node);
+            for (int i = 0; i < count; ++i) {
+                ScanSystemTrayClock(
+                    media::VisualTreeHelper::GetChild(node, i),
+                    trayRootEl,
+                    midlineBottomY,
+                    info,
+                    depth + 1);
+            }
+        } catch (...) {
+        }
+    }
+
+    struct ReflectionBand {
+        comp::CompositionVisualSurface surface{nullptr};
+        comp::SpriteVisual sprite{nullptr};
+    };
+
+    static ReflectionBand CreateReflectionBand(
+        comp::Compositor const& compositor,
+        comp::Visual const& sourceVisual,
+        float scaleY,
+        float maskEndY) {
+        auto visSurface = compositor.CreateVisualSurface();
+        visSurface.SourceVisual(sourceVisual);
+
+        auto surfBrush = compositor.CreateSurfaceBrush(visSurface);
+        surfBrush.Stretch(comp::CompositionStretch::Fill);
+        surfBrush.BitmapInterpolationMode(comp::CompositionBitmapInterpolationMode::Linear);
+
+        auto gradMask = compositor.CreateLinearGradientBrush();
+        gradMask.MappingMode(comp::CompositionMappingMode::Relative);
+        gradMask.StartPoint(num::float2{0.5f, 1.0f});
+        gradMask.EndPoint(num::float2{0.5f, maskEndY});
+        gradMask.ColorStops().Append(compositor.CreateColorGradientStop(0.0f, winrt::Windows::UI::Color{138, 255, 255, 255}));
+        gradMask.ColorStops().Append(compositor.CreateColorGradientStop(0.45f, winrt::Windows::UI::Color{58, 255, 255, 255}));
+        gradMask.ColorStops().Append(compositor.CreateColorGradientStop(1.0f, winrt::Windows::UI::Color{0, 255, 255, 255}));
+
+        auto maskBrush = compositor.CreateMaskBrush();
+        maskBrush.Source(surfBrush);
+        maskBrush.Mask(gradMask);
+
+        auto sprite = compositor.CreateSpriteVisual();
+        sprite.Brush(maskBrush);
+        sprite.Scale(num::float3{1.0f, -scaleY, 1.0f});
+        return ReflectionBand{visSurface, sprite};
+    }
+
+    static void PlaceBand(
+        ReflectionBand const& band,
+        float basePtX,
+        float basePtY,
+        float xStart,
+        float width,
+        float sliceTop,
+        float sliceH,
+        float gapPx,
+        float scaleY) {
+        if (width <= 1.0f || sliceH <= 2.0f) {
+            band.sprite.IsVisible(false);
+            return;
+        }
+        band.sprite.IsVisible(true);
+        band.surface.SourceOffset(num::float2{xStart, sliceTop});
+        band.surface.SourceSize(num::float2{width, sliceH});
+        band.sprite.Size(num::float2{width, sliceH});
+        float topOfRefl = basePtY + sliceTop + sliceH + gapPx;
+        band.sprite.Offset(num::float3{basePtX + xStart, topOfRefl + sliceH * scaleY, 0.0f});
+    }
+
+    static bool UpdateStripReflectionGeometry(
+        xaml::FrameworkElement const& stripFe,
+        xaml::UIElement const& stripEl,
+        xaml::UIElement const& frameEl,
+        ReflectionBand const& leftBand,
+        ReflectionBand const& clockBand,
+        ReflectionBand const& rightBand,
+        bool isSystemTray) {
+        try {
+            float rw = static_cast<float>(stripFe.ActualWidth());
+            float rh = static_cast<float>(stripFe.ActualHeight());
+            if (rw < 8.0f || rh < 24.0f) return false;
+
+            auto pt = stripFe.TransformToVisual(frameEl).TransformPoint(winrt::Windows::Foundation::Point{0.0f, 0.0f});
+
+            if (!isSystemTray) {
+                float iconTop = (rh - 24.0f) * 0.5f;
+                if (iconTop < 0.0f) iconTop = 0.0f;
+                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, 24.0f, 1.2f, 0.85f);
+                return true;
+            }
+
+            float iconSliceH = 18.0f;
+            float iconTop = (rh - iconSliceH) * 0.5f;
+            if (iconTop < 0.0f) iconTop = 0.0f;
+
+            ClockSpanInfo clk;
+            ScanSystemTrayClock(stripFe, stripEl, iconTop + iconSliceH + 1.0f, clk);
+            if (clk.found && clk.right > clk.left && clk.dateHeight > 4.0f) {
+                float cL = (clk.left < 0.0f) ? 0.0f : clk.left;
+                float cR = (clk.right > rw) ? rw : clk.right;
+                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, cL, iconTop, iconSliceH, 1.2f, 0.85f);
+
+                // Reflect only the bottom date line (DateInnerTextBlock) right beneath its baseline with clean air gap.
+                PlaceBand(clockBand, pt.X, pt.Y, cL, cR - cL, clk.dateTop, clk.dateHeight, 0.8f, 0.80f);
+
+                PlaceBand(rightBand, pt.X, pt.Y, cR, rw - cR, iconTop, iconSliceH, 1.2f, 0.85f);
+                return true;
+            }
+
+            PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, iconSliceH, 1.2f, 0.85f);
+            if (clockBand.sprite) clockBand.sprite.IsVisible(false);
+            if (rightBand.sprite) rightBand.sprite.IsVisible(false);
+            return false;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    void AttachStripReflection(xaml::DependencyObject const& stripObj, bool isSystemTray = false) {
+        if (GetTaskbarEdge() != TaskbarEdge::Bottom) return;
+        try {
+            auto stripFe = stripObj.try_as<xaml::FrameworkElement>();
+            auto stripEl = stripObj.try_as<xaml::UIElement>();
+            if (!stripFe || !stripEl) return;
+
+            auto frameObj = media::VisualTreeHelper::GetParent(stripObj);
+            if (!frameObj) return;
+            auto frameEl = frameObj.try_as<xaml::UIElement>();
+            if (!frameEl) return;
+
+            auto sourceVisual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(stripEl);
+            auto hostVisual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(frameEl);
+            if (!sourceVisual || !hostVisual) return;
+            auto compositor = hostVisual.Compositor();
+            if (!compositor) return;
+
+            if (!isSystemTray) {
+                auto band = CreateReflectionBand(compositor, sourceVisual, 0.85f, 0.40f);
+                ReflectionBand empty{};
+                UpdateStripReflectionGeometry(stripFe, stripEl, frameEl, band, empty, empty, false);
+
+                auto weakStrip = winrt::make_weak(stripFe);
+                auto weakStripEl = winrt::make_weak(stripEl);
+                auto weakFrame = winrt::make_weak(frameEl);
+                auto token = stripFe.SizeChanged(
+                    [weakStrip, weakStripEl, weakFrame, band](
+                        winrt::Windows::Foundation::IInspectable const&,
+                        xaml::SizeChangedEventArgs const&) {
+                        if (auto st = weakStrip.get()) {
+                            if (auto se = weakStripEl.get()) {
+                                if (auto fr = weakFrame.get()) {
+                                    ReflectionBand empty{};
+                                    UpdateStripReflectionGeometry(st, se, fr, band, empty, empty, false);
+                                }
+                            }
+                        }
+                    });
+
+                xaml::Hosting::ElementCompositionPreview::SetElementChildVisual(frameEl, band.sprite);
+
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_sizeCallbacks.push_back({weakStrip, token});
+                m_childVisualTargets.push_back(weakFrame);
+                return;
+            }
+
+            // System Tray: 3 independent baseline bands inside a single ContainerVisual
+            auto container = compositor.CreateContainerVisual();
+            auto leftBand = CreateReflectionBand(compositor, sourceVisual, 0.85f, 0.25f);
+            auto clockBand = CreateReflectionBand(compositor, sourceVisual, 0.80f, 0.30f);
+            auto rightBand = CreateReflectionBand(compositor, sourceVisual, 0.85f, 0.25f);
+            container.Children().InsertAtTop(leftBand.sprite);
+            container.Children().InsertAtTop(clockBand.sprite);
+            container.Children().InsertAtTop(rightBand.sprite);
+
+            bool readyNow = UpdateStripReflectionGeometry(stripFe, stripEl, frameEl, leftBand, clockBand, rightBand, true);
+
+            auto weakStrip = winrt::make_weak(stripFe);
+            auto weakStripEl = winrt::make_weak(stripEl);
+            auto weakFrame = winrt::make_weak(frameEl);
+            auto token = stripFe.SizeChanged(
+                [weakStrip, weakStripEl, weakFrame, leftBand, clockBand, rightBand](
+                    winrt::Windows::Foundation::IInspectable const&,
+                    xaml::SizeChangedEventArgs const&) {
+                    if (auto st = weakStrip.get()) {
+                        if (auto se = weakStripEl.get()) {
+                            if (auto fr = weakFrame.get()) {
+                                UpdateStripReflectionGeometry(st, se, fr, leftBand, clockBand, rightBand, true);
+                            }
+                        }
+                    }
+                });
+
+            // If DateInnerTextBlock (~17 levels deep) hasn't completed layout yet when SystemTrayFrameGrid attaches,
+            // listen briefly on LayoutUpdated until found (capped at 90 ticks so idle CPU stays strictly 0%).
+            if (!readyNow) {
+                auto tries = std::make_shared<int>(0);
+                auto layoutTok = std::make_shared<winrt::event_token>();
+                *layoutTok = stripFe.LayoutUpdated(
+                    [weakStrip, weakStripEl, weakFrame, leftBand, clockBand, rightBand, tries, layoutTok](
+                        winrt::Windows::Foundation::IInspectable const&,
+                        winrt::Windows::Foundation::IInspectable const&) {
+                        auto st = weakStrip.get();
+                        auto se = weakStripEl.get();
+                        auto fr = weakFrame.get();
+                        if (!st || !se || !fr) return;
+                        bool done = UpdateStripReflectionGeometry(st, se, fr, leftBand, clockBand, rightBand, true);
+                        if (done || ++(*tries) >= 90) {
+                            try { st.LayoutUpdated(*layoutTok); } catch (...) {}
+                        }
+                    });
+            }
+
+            xaml::Hosting::ElementCompositionPreview::SetElementChildVisual(frameEl, container);
+
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            m_sizeCallbacks.push_back({weakStrip, token});
+            m_childVisualTargets.push_back(weakFrame);
+        } catch (...) {
         }
     }
 
@@ -854,20 +1228,24 @@ private:
             return;
         }
 
-        // 2. Floating glass dock pill on RootGrid: hairline catch-light + subtle ThemeShadow depth
+        // 2. Floating dock pill on RootGrid inside TaskbarFrame (respects selected TaskbarStyle)
         if (name == L"RootGrid" && parentType == L"Taskbar.TaskbarFrame") {
-            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
+            int style = ReadGlassConfig().style;
+            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakeTaskbarPillBackground(obj, style));
             SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-            SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwSpecularRim());
-            SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{0.65, 0.65, 0.65, 0.65}));
-            if (auto el = obj.try_as<xaml::UIElement>()) {
-                try {
-                    SaveAndSet(obj, xaml::UIElement::ShadowProperty(), media::ThemeShadow{});
-                    el.Translation(num::float3{0.0f, 0.0f, 14.0f});
-                    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                    m_implicitTargets.push_back(winrt::make_weak(el));
-                } catch (...) {}
+            SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakeTaskbarPillBorder(style));
+            SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(TaskbarPillBorderThickness(style)));
+            float shadowZ = TaskbarPillShadowZ(style);
+            if (shadowZ > 0.0f) {
+                if (auto el = obj.try_as<xaml::UIElement>()) {
+                    try {
+                        SaveAndSet(obj, xaml::UIElement::ShadowProperty(), media::ThemeShadow{});
+                        el.Translation(num::float3{0.0f, 0.0f, shadowZ});
+                        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                        m_implicitTargets.push_back(winrt::make_weak(el));
+                    } catch (...) {}
+                }
             }
             ApplyLayoutProps(obj, type, name, parentType, true);
             try {
@@ -893,6 +1271,9 @@ private:
             }
             if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
                 try { fe.UpdateLayout(); } catch (...) {}
+            }
+            if (style == STYLE_ICON_REFLECT) {
+                AttachStripReflection(obj);
             }
             return;
         }
@@ -951,32 +1332,39 @@ private:
             return;
         }
 
-        // 4. Separate floating glass pill for System Tray: hairline catch-light + subtle ThemeShadow depth
+        // 4. Separate floating pill for System Tray (respects selected TaskbarStyle)
         if (name == L"SystemTrayFrameGrid") {
-            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
+            int style = ReadGlassConfig().style;
+            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakeTaskbarPillBackground(obj, style));
             if (obj.try_as<controls::StackPanel>()) {
                 SaveAndSet(obj, controls::StackPanel::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::StackPanel::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-                SaveAndSet(obj, controls::StackPanel::BorderBrushProperty(), MakePuwSpecularRim());
-                SaveAndSet(obj, controls::StackPanel::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{0.65, 0.65, 0.65, 0.65}));
+                SaveAndSet(obj, controls::StackPanel::BorderBrushProperty(), MakeTaskbarPillBorder(style));
+                SaveAndSet(obj, controls::StackPanel::BorderThicknessProperty(), winrt::box_value(TaskbarPillBorderThickness(style)));
             } else if (obj.try_as<controls::Grid>()) {
                 SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwSpecularRim());
-                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{0.65, 0.65, 0.65, 0.65}));
+                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakeTaskbarPillBorder(style));
+                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(TaskbarPillBorderThickness(style)));
             }
             ApplyLayoutProps(obj, type, name, parentType, true);
             if (auto el = obj.try_as<xaml::UIElement>()) {
                 EnableSmoothShellSlide(el);
-                try {
-                    SaveAndSet(obj, xaml::UIElement::ShadowProperty(), media::ThemeShadow{});
-                    el.Translation(num::float3{0.0f, 0.0f, 14.0f});
-                } catch (...) {}
+                float shadowZ = TaskbarPillShadowZ(style);
+                if (shadowZ > 0.0f) {
+                    try {
+                        SaveAndSet(obj, xaml::UIElement::ShadowProperty(), media::ThemeShadow{});
+                        el.Translation(num::float3{0.0f, 0.0f, shadowZ});
+                    } catch (...) {}
+                }
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 m_implicitTargets.push_back(winrt::make_weak(el));
             }
             if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
                 try { fe.UpdateLayout(); } catch (...) {}
+            }
+            if (style == STYLE_ICON_REFLECT) {
+                AttachStripReflection(obj, true);
             }
             return;
         }
@@ -988,6 +1376,7 @@ private:
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            SoftenFlyoutShadow(obj);
             return;
         }
 
@@ -997,6 +1386,7 @@ private:
             SaveAndSet(obj, controls::Control::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Control::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             SaveAndSet(obj, controls::Control::PaddingProperty(), winrt::box_value(xaml::Thickness{2.0, 4.0, 2.0, 4.0}));
+            SoftenFlyoutShadow(obj);
             return;
         }
 
@@ -1046,6 +1436,7 @@ private:
                     SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
                     SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
                 }
+                SoftenFlyoutShadow(obj);
             }
             return;
         }
@@ -1060,6 +1451,7 @@ private:
                 SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
                 SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
                 SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+                SoftenFlyoutShadow(obj);
             }
             return;
         }
@@ -1080,6 +1472,7 @@ private:
                 SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
                 SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
                 SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+                SoftenFlyoutShadow(obj);
             }
             return;
         }
@@ -1109,28 +1502,35 @@ private:
             return;
         }
 
-        // 6. Matching floating glass pill for the Widgets button: hairline catch-light + subtle ThemeShadow depth
+        // 6. Matching floating pill for the Widgets button (respects selected TaskbarStyle)
         if (name == L"ExperienceToggleButtonRootPanel"
             && parentType == L"Taskbar.AugmentedEntryPointButton") {
-            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
+            int style = ReadGlassConfig().style;
+            SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakeTaskbarPillBackground(obj, style));
             if (obj.try_as<controls::Grid>()) {
                 SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwSpecularRim());
-                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{0.65, 0.65, 0.65, 0.65}));
+                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakeTaskbarPillBorder(style));
+                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(TaskbarPillBorderThickness(style)));
             }
             ApplyLayoutProps(obj, type, name, parentType, true);
             if (auto el = obj.try_as<xaml::UIElement>()) {
                 EnableSmoothShellSlide(el);
-                try {
-                    SaveAndSet(obj, xaml::UIElement::ShadowProperty(), media::ThemeShadow{});
-                    el.Translation(num::float3{0.0f, 0.0f, 14.0f});
-                } catch (...) {}
+                float shadowZ = TaskbarPillShadowZ(style);
+                if (shadowZ > 0.0f) {
+                    try {
+                        SaveAndSet(obj, xaml::UIElement::ShadowProperty(), media::ThemeShadow{});
+                        el.Translation(num::float3{0.0f, 0.0f, shadowZ});
+                    } catch (...) {}
+                }
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 m_implicitTargets.push_back(winrt::make_weak(el));
             }
             if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
                 try { fe.UpdateLayout(); } catch (...) {}
+            }
+            if (style == STYLE_ICON_REFLECT) {
+                AttachStripReflection(obj, false);
             }
             return;
         }
@@ -1153,17 +1553,77 @@ private:
         }
     }
 
+    // Native shell flyouts cast a deep ThemeShadow (Z ~32-64) that is clipped flat by the flyout
+    // host window at the taskbar edge; behind see-through glass that clip reads as a hard cut line.
+    // Cap the Z of the nearest shadow-casting ancestor so the shadow stays inside the host window.
+    void SoftenFlyoutShadow(xaml::DependencyObject const& obj) {
+        // Some hosts (e.g. Start's #StartDropShadow) cast the shadow from a sibling, so each
+        // ancestor's direct children are checked too.
+        constexpr float kMaxFlyoutShadowZ = 6.0f;
+        auto cap = [&](xaml::DependencyObject const& o) {
+            auto el = o.try_as<xaml::UIElement>();
+            if (!el || !el.Shadow()) return;
+            auto t = el.Translation();
+            if (t.z <= kMaxFlyoutShadowZ) return;
+            {
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_savedTranslations.push_back({winrt::make_weak(el), t});
+            }
+            el.Translation(num::float3{t.x, t.y, kMaxFlyoutShadowZ});
+        };
+        xaml::DependencyObject node = obj;
+        for (int depth = 0; node && depth < 10; ++depth) {
+            try {
+                cap(node);
+                int n = media::VisualTreeHelper::GetChildrenCount(node);
+                for (int i = 0; i < n; ++i) {
+                    cap(media::VisualTreeHelper::GetChild(node, i));
+                }
+                node = media::VisualTreeHelper::GetParent(node);
+            } catch (...) {
+                return;
+            }
+        }
+    }
+
     void RestoreAllOnUiThread() {
         std::vector<SavedPropCallback> callbacks;
+        std::vector<SavedSizeCallback> sizeCallbacks;
+        std::vector<winrt::weak_ref<xaml::UIElement>> childVisuals;
         std::vector<winrt::weak_ref<xaml::UIElement>> implicits;
         std::vector<SavedAcrylic> acrylics;
         std::vector<SavedProp> items;
+        std::vector<SavedTranslation> translations;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            translations.swap(m_savedTranslations);
             callbacks.swap(m_propCallbacks);
+            sizeCallbacks.swap(m_sizeCallbacks);
+            childVisuals.swap(m_childVisualTargets);
             implicits.swap(m_implicitTargets);
             acrylics.swap(m_savedAcrylics);
             items.swap(m_saved);
+        }
+        for (auto& sc : sizeCallbacks) {
+            try {
+                if (auto fe = sc.target.get()) {
+                    auto token = sc.token;
+                    RunOnObjectThread(fe, [fe, token]() {
+                        fe.SizeChanged(token);
+                    });
+                }
+            } catch (...) {
+            }
+        }
+        for (auto& cv : childVisuals) {
+            try {
+                if (auto el = cv.get()) {
+                    RunOnObjectThread(el, [el]() {
+                        xaml::Hosting::ElementCompositionPreview::SetElementChildVisual(el, nullptr);
+                    });
+                }
+            } catch (...) {
+            }
         }
         for (auto& cb : callbacks) {
             try {
@@ -1185,6 +1645,17 @@ private:
                         if (auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el)) {
                             visual.ImplicitAnimations(nullptr);
                         }
+                    });
+                }
+            } catch (...) {
+            }
+        }
+        for (auto& t : translations) {
+            try {
+                if (auto el = t.el.get()) {
+                    auto original = t.original;
+                    RunOnObjectThread(el, [el, original]() {
+                        try { el.Translation(original); } catch (...) {}
                     });
                 }
             } catch (...) {
@@ -1494,7 +1965,10 @@ private:
     std::vector<SavedProp> m_saved;
     std::vector<SavedAcrylic> m_savedAcrylics;
     std::vector<SavedPropCallback> m_propCallbacks;
+    std::vector<SavedSizeCallback> m_sizeCallbacks;
     std::vector<winrt::weak_ref<xaml::UIElement>> m_implicitTargets;
+    std::vector<winrt::weak_ref<xaml::UIElement>> m_childVisualTargets;
+    std::vector<SavedTranslation> m_savedTranslations;
     std::atomic<bool> m_stopWatcher{false};
     std::thread m_watcher;
 };
