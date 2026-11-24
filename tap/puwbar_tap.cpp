@@ -1009,6 +1009,7 @@ private:
         xaml::UIElement const& trayRootEl,
         float midlineBottomY,
         ClockSpanInfo& info,
+        bool namedOnly,
         int depth = 0) {
         if (!node || depth > 32) return;
         try {
@@ -1020,7 +1021,8 @@ private:
                         auto nm = fe.Name();
                         auto pt = fe.TransformToVisual(trayRootEl).TransformPoint(winrt::Windows::Foundation::Point{0.0f, 0.0f});
                         float bottom = pt.Y + static_cast<float>(ah);
-                        bool isClockPart = (nm == L"DateInnerTextBlock" || nm == L"TimeInnerTextBlock" || bottom > midlineBottomY);
+                        bool named = (nm == L"DateInnerTextBlock" || nm == L"TimeInnerTextBlock");
+                        bool isClockPart = named || (!namedOnly && bottom > midlineBottomY);
                         if (isClockPart) {
                             float l = pt.X - 3.0f;
                             float r = pt.X + static_cast<float>(aw) + 3.0f;
@@ -1042,6 +1044,7 @@ private:
                     trayRootEl,
                     midlineBottomY,
                     info,
+                    namedOnly,
                     depth + 1);
             }
         } catch (...) {
@@ -1146,8 +1149,14 @@ private:
             float iconTop = (rh - iconSliceH) * 0.5f;
             if (iconTop < 0.0f) iconTop = 0.0f;
 
+            // Trust the named clock TextBlocks first. The "below the midline" heuristic can grab tray
+            // glyphs (e.g. the ^ chevron) while a restyle is mid-layout, swallowing the icon band.
             ClockSpanInfo clk;
-            ScanSystemTrayClock(stripFe, stripEl, iconTop + iconSliceH + 1.0f, clk);
+            ScanSystemTrayClock(stripFe, stripEl, iconTop + iconSliceH + 1.0f, clk, true);
+            if (!clk.found) {
+                clk = ClockSpanInfo{};
+                ScanSystemTrayClock(stripFe, stripEl, iconTop + iconSliceH + 1.0f, clk, false);
+            }
             if (clk.found && clk.right > clk.left && clk.dateHeight > 4.0f) {
                 float cL = (clk.left < 0.0f) ? 0.0f : clk.left;
                 float cR = (clk.right > rw) ? rw : clk.right;
@@ -1244,21 +1253,24 @@ private:
                     }
                 });
 
-            // If DateInnerTextBlock (~17 levels deep) hasn't completed layout yet when SystemTrayFrameGrid attaches,
-            // listen briefly on LayoutUpdated until found (capped at 90 ticks so idle CPU stays strictly 0%).
-            if (!readyNow) {
+            // Re-measure on the next layout passes: DateInnerTextBlock (~17 levels deep) may not be laid
+            // out yet, and on a style reload the tray margins change without resizing it (no SizeChanged).
+            // Capped at 90 ticks, and stops early once the clock was found on a few passes in a row, so
+            // idle CPU stays strictly 0%.
+            {
                 auto tries = std::make_shared<int>(0);
+                auto stable = std::make_shared<int>(readyNow ? 1 : 0);
                 auto layoutTok = std::make_shared<winrt::event_token>();
                 *layoutTok = stripFe.LayoutUpdated(
-                    [weakStrip, weakStripEl, weakFrame, leftBand, clockBand, rightBand, tries, layoutTok](
+                    [weakStrip, weakStripEl, weakFrame, leftBand, clockBand, rightBand, tries, stable, layoutTok](
                         winrt::Windows::Foundation::IInspectable const&,
                         winrt::Windows::Foundation::IInspectable const&) {
                         auto st = weakStrip.get();
                         auto se = weakStripEl.get();
                         auto fr = weakFrame.get();
                         if (!st || !se || !fr) return;
-                        bool done = UpdateStripReflectionGeometry(st, se, fr, leftBand, clockBand, rightBand, true);
-                        if (done || ++(*tries) >= 90) {
+                        bool done = UpdateStripReflectionGeometry(st, se, fr, leftBand, clockBand, rightBand, true);                        *stable = done ? *stable + 1 : 0;
+                        if (*stable >= 4 || ++(*tries) >= 90) {
                             try { st.LayoutUpdated(*layoutTok); } catch (...) {}
                         }
                     });
