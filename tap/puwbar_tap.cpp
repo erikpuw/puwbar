@@ -59,7 +59,7 @@ static constexpr uint32_t SURF_TOOLTIP        = 1u << 5;
 static constexpr uint32_t SURF_THUMBNAIL      = 1u << 6;
 static constexpr uint32_t SURF_ALL            = 0x7Fu;
 
-static constexpr int STYLE_FROSTED_GLASS = 0; // Default v1.0.7 frosted glass
+static constexpr int STYLE_FROSTED_GLASS = 0; // Default frosted glass
 static constexpr int STYLE_CRYSTAL_CLEAR = 1; // Transparent glass with glossy reflection
 static constexpr int STYLE_ICON_REFLECT  = 2; // Completely borderless/transparent + real icon reflection
 static constexpr int STYLE_FLAT_FROSTED  = 3; // v1.0.6 look: popup glass, flat 15% hairline, no shadow
