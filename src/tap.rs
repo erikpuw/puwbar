@@ -404,6 +404,63 @@ unsafe fn explorer_xaml_ready() -> bool {
     .is_null()
 }
 
+/// Calls `f` with every native taskbar window (the primary one and those on secondary monitors).
+unsafe fn for_each_taskbar(mut f: impl FnMut(HWND)) {
+    for class in ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"] {
+        let class_w = wide(class);
+        let mut prev: HWND = null_mut();
+        loop {
+            let hwnd = FindWindowExW(null_mut(), prev, class_w.as_ptr(), null());
+            if hwnd.is_null() {
+                break;
+            }
+            f(hwnd);
+            prev = hwnd;
+        }
+    }
+}
+
+/// Makes sure no native taskbar is left hidden (by a veil that was cut short, or a previous run).
+unsafe fn show_hidden_taskbars() {
+    for_each_taskbar(|hwnd| {
+        if IsWindowVisible(hwnd) == 0 {
+            ShowWindow(hwnd, SW_SHOWNA);
+        }
+    });
+}
+
+/// Hides the native taskbar windows the moment they exist and keeps them hidden until the tap has
+/// restyled them (plus a short grace for the first elements), or `max_wait` passes. Without it, a
+/// logon or an Explorer restart shows the stock taskbar for a moment before PuwBar's glass replaces it.
+/// The caller must `ResetEvent` the tap-ready event first, or a stale signal ends the veil at once.
+fn spawn_taskbar_veil(max_wait: Duration) {
+    const GRACE: Duration = Duration::from_millis(600);
+    std::thread::spawn(move || unsafe {
+        const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
+        let ready = OpenEventW(SYNCHRONIZE_ACCESS, 0, wide(READY_EVENT_NAME).as_ptr());
+        let deadline = std::time::Instant::now() + max_wait;
+        let mut styled_at: Option<std::time::Instant> = None;
+        loop {
+            for_each_taskbar(|hwnd| {
+                if IsWindowVisible(hwnd) != 0 {
+                    ShowWindow(hwnd, SW_HIDE);
+                }
+            });
+            if styled_at.is_none() && !ready.is_null() && WaitForSingleObject(ready, 0) == WAIT_OBJECT_0 {
+                styled_at = Some(std::time::Instant::now());
+            }
+            if styled_at.is_some_and(|t| t.elapsed() >= GRACE) || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        show_hidden_taskbars();
+        if !ready.is_null() {
+            CloseHandle(ready);
+        }
+    });
+}
+
 unsafe fn attach_tap_with_retry(
     dll_path: &Path,
     ready_event: HANDLE,
@@ -447,6 +504,7 @@ unsafe fn terminate_process_by_name(target_exe: &str) {
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         unsafe {
+            show_hidden_taskbars();
             // Signal Explorer TAP to restore native taskbar/tray cleanly without restarting Explorer.
             let cfg = std::env::temp_dir().join("puwbar_dark_tint.cfg");
             let _ = std::fs::write(&cfg, b"stop");
@@ -971,6 +1029,8 @@ unsafe extern "system" fn host_wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         let dll = DLL_PATH.with(|p| p.borrow().clone());
         let ready = READY_HANDLE.with(|r| r.get()) as HANDLE;
         if let Some(dll) = dll {
+            ResetEvent(ready);
+            spawn_taskbar_veil(Duration::from_secs(10));
             let _ = attach_tap_with_retry(&dll, ready, Duration::from_secs(10));
         }
         return 0;
@@ -1013,11 +1073,10 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
             mutex,
         };
 
-        // Ensure native taskbar is visible if a previous run left it hidden.
-        let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
-        if !tray.is_null() && IsWindowVisible(tray) == 0 {
-            ShowWindow(tray, SW_SHOWNA);
-        }
+        // Ensure native taskbars are visible if a previous run left them hidden, then veil them until styled.
+        show_hidden_taskbars();
+        ResetEvent(ready_event);
+        spawn_taskbar_veil(Duration::from_secs(10));
 
         // Sync persisted enabled surfaces & taskbar style for both Explorer and AppContainer hosts before attaching.
         sync_glass_cfg_file(read_surfaces_mask(), read_taskbar_style());
