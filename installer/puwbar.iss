@@ -4,7 +4,7 @@
 ;   ISCC installer\puwbar.iss
 
 #define MyAppName "PuwBar"
-#define MyAppVersion "1.0.6"
+#define MyAppVersion "1.0.7"
 #define MyAppPublisher "erikpuw"
 #define MyAppURL "https://github.com/erikpuw/puwbar"
 #define MyAppExeName "puwbar.exe"

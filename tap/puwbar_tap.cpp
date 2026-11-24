@@ -340,8 +340,29 @@ static media::Brush MakePuwGlass(xaml::DependencyObject const& obj) {
 }
 
 static media::SolidColorBrush MakePuwBorder() {
-    // Delicate 15% white hairline glass edge
+    // Delicate 15% white hairline glass edge for popups
     return media::SolidColorBrush(winrt::Windows::UI::Color{38, 255, 255, 255});
+}
+
+static media::LinearGradientBrush MakePuwSpecularRim() {
+    // Apple-style hairline catch-light: delicate ~28% top edge, whisper-thin ~10% sides, subtle ~20% bottom bounce.
+    // Depth comes from ThemeShadow elevation underneath, not a thick painted border.
+    media::LinearGradientBrush rim;
+    rim.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
+    rim.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
+
+    auto addStop = [&](double offset, uint8_t a) {
+        media::GradientStop stop;
+        stop.Offset(offset);
+        stop.Color(winrt::Windows::UI::Color{a, 255, 255, 255});
+        rim.GradientStops().Append(stop);
+    };
+    addStop(0.00, 71); // ~28% crisp hairline catch-light along top edge
+    addStop(0.18, 30); // ~12% gentle shoulder taper
+    addStop(0.55, 26); // ~10% whisper-thin side edge (zero heavy frame look)
+    addStop(0.88, 33); // ~13% lower curve
+    addStop(1.00, 51); // ~20% soft bottom bounce
+    return rim;
 }
 
 // Reads Windows 11 Taskbar alignment setting: 0 = Left/Top, 1 (default) = Center.
@@ -833,13 +854,21 @@ private:
             return;
         }
 
-        // 2. Floating dark-smoke glass dock pill on RootGrid inside TaskbarFrame
+        // 2. Floating glass dock pill on RootGrid: hairline catch-light + subtle ThemeShadow depth
         if (name == L"RootGrid" && parentType == L"Taskbar.TaskbarFrame") {
             SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
             SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
             SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-            SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
-            SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+            SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwSpecularRim());
+            SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{0.65, 0.65, 0.65, 0.65}));
+            if (auto el = obj.try_as<xaml::UIElement>()) {
+                try {
+                    SaveAndSet(obj, xaml::UIElement::ShadowProperty(), media::ThemeShadow{});
+                    el.Translation(num::float3{0.0f, 0.0f, 14.0f});
+                    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                    m_implicitTargets.push_back(winrt::make_weak(el));
+                } catch (...) {}
+            }
             ApplyLayoutProps(obj, type, name, parentType, true);
             try {
                 auto token = obj.RegisterPropertyChangedCallback(
@@ -922,23 +951,27 @@ private:
             return;
         }
 
-        // 4. Separate floating glass pill for the real Windows 11 System Tray (65% dark-smoke veil for crisp white text on pure white backgrounds)
+        // 4. Separate floating glass pill for System Tray: hairline catch-light + subtle ThemeShadow depth
         if (name == L"SystemTrayFrameGrid") {
             SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
             if (obj.try_as<controls::StackPanel>()) {
                 SaveAndSet(obj, controls::StackPanel::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::StackPanel::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-                SaveAndSet(obj, controls::StackPanel::BorderBrushProperty(), MakePuwBorder());
-                SaveAndSet(obj, controls::StackPanel::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+                SaveAndSet(obj, controls::StackPanel::BorderBrushProperty(), MakePuwSpecularRim());
+                SaveAndSet(obj, controls::StackPanel::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{0.65, 0.65, 0.65, 0.65}));
             } else if (obj.try_as<controls::Grid>()) {
                 SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
-                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwSpecularRim());
+                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{0.65, 0.65, 0.65, 0.65}));
             }
             ApplyLayoutProps(obj, type, name, parentType, true);
             if (auto el = obj.try_as<xaml::UIElement>()) {
                 EnableSmoothShellSlide(el);
+                try {
+                    SaveAndSet(obj, xaml::UIElement::ShadowProperty(), media::ThemeShadow{});
+                    el.Translation(num::float3{0.0f, 0.0f, 14.0f});
+                } catch (...) {}
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 m_implicitTargets.push_back(winrt::make_weak(el));
             }
@@ -1076,19 +1109,23 @@ private:
             return;
         }
 
-        // 6. Matching floating glass pill for the Widgets button (visible only when Widgets is enabled in Windows)
+        // 6. Matching floating glass pill for the Widgets button: hairline catch-light + subtle ThemeShadow depth
         if (name == L"ExperienceToggleButtonRootPanel"
             && parentType == L"Taskbar.AugmentedEntryPointButton") {
             SaveAndSet(obj, controls::Panel::BackgroundProperty(), MakePuwGlass(obj));
             if (obj.try_as<controls::Grid>()) {
                 SaveAndSet(obj, controls::Grid::BackgroundSizingProperty(), winrt::box_value(controls::BackgroundSizing::InnerBorderEdge));
                 SaveAndSet(obj, controls::Grid::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
-                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwBorder());
-                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+                SaveAndSet(obj, controls::Grid::BorderBrushProperty(), MakePuwSpecularRim());
+                SaveAndSet(obj, controls::Grid::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{0.65, 0.65, 0.65, 0.65}));
             }
             ApplyLayoutProps(obj, type, name, parentType, true);
             if (auto el = obj.try_as<xaml::UIElement>()) {
                 EnableSmoothShellSlide(el);
+                try {
+                    SaveAndSet(obj, xaml::UIElement::ShadowProperty(), media::ThemeShadow{});
+                    el.Translation(num::float3{0.0f, 0.0f, 14.0f});
+                } catch (...) {}
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 m_implicitTargets.push_back(winrt::make_weak(el));
             }
@@ -1144,6 +1181,7 @@ private:
             try {
                 if (auto el = imp.get()) {
                     RunOnObjectThread(el, [el]() {
+                        try { el.Translation(num::float3{0.0f, 0.0f, 0.0f}); } catch (...) {}
                         if (auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el)) {
                             visual.ImplicitAnimations(nullptr);
                         }

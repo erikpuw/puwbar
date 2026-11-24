@@ -19,7 +19,7 @@
 
 | Feature | What it does |
 |---|---|
-| **Real frosted glass** | Real-time backdrop blur via `Windows.UI.Composition` (`CreateBackdropBrush` + `D2D1GaussianBlur`), 15% white hairline border, 12px rounded corners. |
+| **Real frosted glass** | Real-time backdrop blur via `Windows.UI.Composition` (`CreateBackdropBrush` + `D2D1GaussianBlur`), `0.65px` specular catch-light rim with `ThemeShadow` depth, 12px rounded corners. |
 | **Native behavior intact** | Never hides or replaces Explorer. Keeps live tray animations (RunCat 365, UniKey), native right-click menus, the overflow icon grid, Start menu, and window previews. |
 | **All 4 edges & Left/Center** | Adapts live when switching taskbar position (**Bottom / Top / Left / Right**) or alignment (**Left / Center**) in Windows Settings. |
 | **Right-edge indicator fix** | Keeps the running-app indicator locked to the right edge on vertical right-docked taskbars. |
