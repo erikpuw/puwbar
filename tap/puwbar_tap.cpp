@@ -65,19 +65,16 @@ static constexpr int STYLE_ICON_REFLECT  = 2; // Completely borderless/transpare
 static constexpr int STYLE_FLAT_FROSTED  = 3; // v1.0.7 look: popup glass, 0.65px catch-light rim, no shadow
 
 struct GlassConfig {
-    int level = 2; // 0 = Light (24%), 1 = Balanced (45%), 2 = High contrast (62%)
     uint32_t surfaces = SURF_ALL;
     int style = STYLE_FROSTED_GLASS;
     bool stop = false;
 
     uint32_t packed() const {
-        return (static_cast<uint32_t>(style) << 16)
-            | (static_cast<uint32_t>(level) << 8)
-            | (surfaces & SURF_ALL);
+        return (static_cast<uint32_t>(style) << 16) | (surfaces & SURF_ALL);
     }
 };
 
-// Reads "<level>:<hex-mask>[:<style>]" or "stop" from puwbar_dark_tint.cfg next to puwbar_tap_*.dll.
+// Reads "<hex-mask>[:<style>]" or "stop" from puwbar_dark_tint.cfg next to puwbar_tap_*.dll.
 static GlassConfig ReadGlassConfig() {
     GlassConfig cfg;
     wchar_t modPath[MAX_PATH]{};
@@ -99,21 +96,17 @@ static GlassConfig ReadGlassConfig() {
         cfg.stop = true;
         return cfg;
     }
-    if (buf[0] == '0') cfg.level = 0;
-    else if (buf[0] == '1') cfg.level = 1;
-    else cfg.level = 2;
-    if (read >= 3 && buf[1] == ':') {
-        char* endPtr = nullptr;
-        unsigned long mask = strtoul(buf + 2, &endPtr, 16);
-        cfg.surfaces = static_cast<uint32_t>(mask) & SURF_ALL;
-        if (endPtr && *endPtr == ':' && endPtr[1] != '\0') {
-            int parsedStyle = static_cast<int>(strtol(endPtr + 1, nullptr, 10));
-            if (parsedStyle == STYLE_CRYSTAL_CLEAR || parsedStyle == STYLE_ICON_REFLECT
-                || parsedStyle == STYLE_FLAT_FROSTED) {
-                cfg.style = parsedStyle;
-            } else {
-                cfg.style = STYLE_FROSTED_GLASS;
-            }
+    char* endPtr = nullptr;
+    unsigned long mask = strtoul(buf, &endPtr, 16);
+    if (endPtr == buf) return cfg; // unreadable: keep defaults
+    cfg.surfaces = static_cast<uint32_t>(mask) & SURF_ALL;
+    if (*endPtr == ':' && endPtr[1] != '\0') {
+        int parsedStyle = static_cast<int>(strtol(endPtr + 1, nullptr, 10));
+        if (parsedStyle == STYLE_CRYSTAL_CLEAR || parsedStyle == STYLE_ICON_REFLECT
+            || parsedStyle == STYLE_FLAT_FROSTED) {
+            cfg.style = parsedStyle;
+        } else {
+            cfg.style = STYLE_FROSTED_GLASS;
         }
     }
     return cfg;
@@ -213,24 +206,76 @@ struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, ge::IGraphicsE
     }
 };
 
-struct ColorTintEffect : winrt::implements<ColorTintEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
-    winrt::hstring m_name{L"Tint"};
-    // Premultiplied RGBA: 0 = 24% light, 1 = 45% balanced, 2 = 62% high contrast
-    float m_color[4] = {0.028f, 0.035f, 0.052f, 0.62f};
+// Auto contrast: turns the (blurred) backdrop into a black layer whose alpha follows the backdrop's
+// luminance, alpha = slope * (luma - threshold) clamped to 0..1. Composited over the backdrop, bright
+// wallpaper gets a dark veil (white text stays readable, the glass stays visible) while dark wallpaper
+// is left untouched. Runs entirely in the GPU effect graph, so it follows windows behind the bar too.
+struct LumaDarkenEffect : winrt::implements<LumaDarkenEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
+    winrt::hstring m_name{L"Luma"};
+    ge::IGraphicsEffectSource m_source{nullptr};
+    float m_matrix[20]{};
 
-    explicit ColorTintEffect(int level) {
-        if (level == 0) {
-            m_color[0] = 0.020f;
-            m_color[1] = 0.025f;
-            m_color[2] = 0.040f;
-            m_color[3] = 0.24f;
-        } else if (level == 1) {
-            m_color[0] = 0.024f;
-            m_color[1] = 0.030f;
-            m_color[2] = 0.046f;
-            m_color[3] = 0.45f;
+    LumaDarkenEffect(float slope, float threshold) {
+        // D2D 5x4 color matrix: row = input channel (R, G, B, A, constant), column = output channel (R, G, B, A).
+        // RGB outputs stay 0 (black); only alpha is driven, from Rec.709 luma.
+        m_matrix[3] = slope * 0.2126f;
+        m_matrix[7] = slope * 0.7152f;
+        m_matrix[11] = slope * 0.0722f;
+        m_matrix[19] = -slope * threshold;
+    }
+
+    winrt::hstring Name() const { return m_name; }
+    void Name(winrt::hstring const& v) { m_name = v; }
+
+    HRESULT STDMETHODCALLTYPE GetEffectId(GUID* id) noexcept override {
+        if (!id) return E_POINTER;
+        *id = CLSID_D2D1ColorMatrix;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetNamedPropertyMapping(LPCWSTR, UINT*, ge_interop::GRAPHICS_EFFECT_PROPERTY_MAPPING*) noexcept override {
+        return E_INVALIDARG;
+    }
+    HRESULT STDMETHODCALLTYPE GetPropertyCount(UINT* count) noexcept override {
+        if (!count) return E_POINTER;
+        *count = 3;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetProperty(UINT index, ABI::Windows::Foundation::IPropertyValue** value) noexcept override {
+        if (!value) return E_POINTER;
+        try {
+            winrt::Windows::Foundation::IInspectable boxed{nullptr};
+            if (index == D2D1_COLORMATRIX_PROP_COLOR_MATRIX) {
+                boxed = winrt::Windows::Foundation::PropertyValue::CreateSingleArray(m_matrix);
+            } else if (index == D2D1_COLORMATRIX_PROP_ALPHA_MODE) {
+                boxed = winrt::box_value(static_cast<uint32_t>(D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED));
+            } else if (index == D2D1_COLORMATRIX_PROP_CLAMP_OUTPUT) {
+                boxed = winrt::box_value(true);
+            } else {
+                return E_INVALIDARG;
+            }
+            return winrt::get_unknown(boxed)->QueryInterface(IID_PPV_ARGS(value));
+        } catch (...) {
+            return E_FAIL;
         }
     }
+    HRESULT STDMETHODCALLTYPE GetSource(UINT index, ge_interop::IGraphicsEffectSource** source) noexcept override {
+        if (!source || index != 0 || !m_source) return E_INVALIDARG;
+        return winrt::get_unknown(m_source)->QueryInterface(IID_PPV_ARGS(source));
+    }
+    HRESULT STDMETHODCALLTYPE GetSourceCount(UINT* count) noexcept override {
+        if (!count) return E_POINTER;
+        *count = 1;
+        return S_OK;
+    }
+};
+
+struct ColorTintEffect : winrt::implements<ColorTintEffect, ge::IGraphicsEffect, ge::IGraphicsEffectSource, ge_interop::IGraphicsEffectD2D1Interop> {
+    winrt::hstring m_name{L"Tint"};
+    // Premultiplied RGBA of a flat dark-smoke veil with the given alpha.
+    float m_color[4];
+
+    explicit ColorTintEffect(float alpha)
+        : m_color{0.053f * alpha, 0.067f * alpha, 0.100f * alpha, alpha} {}
 
     winrt::hstring Name() const { return m_name; }
     void Name(winrt::hstring const& v) { m_name = v; }
@@ -271,7 +316,6 @@ struct CompositeEffect : winrt::implements<CompositeEffect, ge::IGraphicsEffect,
     winrt::hstring m_name{L"Composite"};
     ge::IGraphicsEffectSource m_src0{nullptr};
     ge::IGraphicsEffectSource m_src1{nullptr};
-    ge::IGraphicsEffectSource m_src2{nullptr}; // optional third layer (surface sheen)
 
     winrt::hstring Name() const { return m_name; }
     void Name(winrt::hstring const& v) { m_name = v; }
@@ -300,69 +344,122 @@ struct CompositeEffect : winrt::implements<CompositeEffect, ge::IGraphicsEffect,
     }
     HRESULT STDMETHODCALLTYPE GetSource(UINT index, ge_interop::IGraphicsEffectSource** source) noexcept override {
         if (!source) return E_POINTER;
-        auto const& s = (index == 0) ? m_src0
-            : (index == 1) ? m_src1
-            : (index == 2) ? m_src2
-            : ge::IGraphicsEffectSource{nullptr};
+        auto const& s = (index == 0) ? m_src0 : (index == 1 ? m_src1 : ge::IGraphicsEffectSource{nullptr});
         if (!s) return E_INVALIDARG;
         return winrt::get_unknown(s)->QueryInterface(IID_PPV_ARGS(source));
     }
     HRESULT STDMETHODCALLTYPE GetSourceCount(UINT* count) noexcept override {
         if (!count) return E_POINTER;
-        *count = m_src2 ? 3 : 2;
+        *count = 2;
         return S_OK;
     }
 };
 
-static winrt::Windows::UI::Color FallbackColorForLevel(int level) {
-    if (level == 0) return winrt::Windows::UI::Color{90, 18, 22, 32};
-    if (level == 1) return winrt::Windows::UI::Color{128, 16, 20, 30};
-    return winrt::Windows::UI::Color{160, 14, 18, 26};
+// Used when the composition brush cannot be built at all.
+static winrt::Windows::UI::Color FallbackGlassColor() {
+    return winrt::Windows::UI::Color{110, 16, 20, 30};
 }
+
+// Blur per kind of surface, tuned by eye against each other (the same value reads stronger in some hosts):
+// the taskbar pills and the small flyouts (Quick Settings, Notifications, Calendar, Jump Lists, the tray
+// overflow popup, tooltips) stay light so the wallpaper still shows through, while the large Start menu
+// is blurred harder or its surface reads as noisy behind the text. Every surface shares the same
+// auto-contrast layer on top of its blur.
+static constexpr float kPillBlur = 5.0f;
+static constexpr float kFlyoutBlur = 6.0f;
+static constexpr float kStartBlur = 12.0f;
+
+static bool IsStartMenuHost() {
+    static bool const isStart = GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr;
+    return isStart;
+}
+
+// What sits on top of the blurred, auto-contrast backdrop:
+//   Plain: nothing (popups, so they match the pills' see-through feel),
+//   Lit:   the shared surface lighting (the Frosted pill),
+//   Smoke: a fixed dark-smoke veil (the Flat Frosted pill, the v1.0.7 look).
+enum class GlassLook { Plain, Lit, Smoke };
+static constexpr float kSmokeAlpha = 0.16f;
+
+// Surface lighting shared by Crystal Clear (as its whole background) and the Frosted pill (as a layer
+// over the blurred backdrop), so both read as the same glass slab: a soft sheen right under the top
+// edge that fades out, a ~4% neutral dim in the core so icons keep contrast on bright wallpapers,
+// and a faint bounce along the bottom.
+struct GlassSurfaceStop {
+    double offset;
+    uint8_t alpha;
+    uint8_t rgb;
+};
+static constexpr GlassSurfaceStop kGlassSurface[] = {
+    {0.00, 56, 255}, // ~22% sheen right under the top edge
+    {0.22, 20, 255}, // ~8% sheen fading softly
+    {0.55, 10, 0},   // ~4% neutral dim in the clear core
+    {0.85, 8, 0},    // ~3% dim
+    {1.00, 20, 255}, // ~8% faint bottom bounce
+};
 
 struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     comp::Compositor m_compositor{nullptr};
-    int m_level = 2;
-    float m_blur = 12.0f;
-    bool m_sheen = false; // surface sheen layer: makes the pane read as a lit glass slab
+    GlassLook m_look = GlassLook::Plain;
 
-    PuwGlassBrush(comp::Compositor compositor, int level, float blur = 12.0f, bool sheen = false)
-        : m_compositor(std::move(compositor)), m_level(level), m_blur(blur), m_sheen(sheen) {
-        FallbackColor(FallbackColorForLevel(level));
+    PuwGlassBrush(comp::Compositor compositor, GlassLook look)
+        : m_compositor(std::move(compositor)), m_look(look) {
+        FallbackColor(FallbackGlassColor());
     }
 
-    // Soft catch-light under the top edge fading out, plus a faint bounce along the bottom
-    // (same surface lighting as the Crystal Clear background).
     comp::CompositionLinearGradientBrush MakeSheen() const {
         auto g = m_compositor.CreateLinearGradientBrush();
         g.StartPoint(num::float2{0.5f, 0.0f});
         g.EndPoint(num::float2{0.5f, 1.0f});
-        auto stop = [&](float offset, uint8_t a) {
-            g.ColorStops().Append(m_compositor.CreateColorGradientStop(offset, winrt::Windows::UI::Color{a, 255, 255, 255}));
-        };
-        stop(0.00f, 56); // ~22% sheen right under the top edge
-        stop(0.22f, 20); // ~8% fading softly
-        stop(0.50f, 0);
-        stop(0.85f, 0);
-        stop(1.00f, 20); // ~8% bottom bounce
+        // Over a blurred backdrop the lighting reads stronger than over a sharp one, so it is eased.
+        constexpr float kBlurredScale = 0.6f;
+        for (auto const& s : kGlassSurface) {
+            auto a = static_cast<uint8_t>(s.alpha * kBlurredScale + 0.5f);
+            g.ColorStops().Append(m_compositor.CreateColorGradientStop(
+                static_cast<float>(s.offset), winrt::Windows::UI::Color{a, s.rgb, s.rgb, s.rgb}));
+        }
         return g;
     }
 
-    comp::CompositionEffectBrush BuildBrush(bool withSheen) const {
+    // Graph: blur -> [auto contrast darkening] -> [sheen | smoke veil]. Effect node names must be
+    // unique, so the luma branch has its own blur node (both read the same "Backdrop" source).
+    comp::CompositionEffectBrush BuildBrush(bool adaptive) const {
+        float const blurAmount = (m_look != GlassLook::Plain) ? kPillBlur
+            : (IsStartMenuHost() ? kStartBlur : kFlyoutBlur);
         auto blur = winrt::make_self<GaussianBlurEffect>();
         blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
-        blur->m_blur = m_blur;
-        auto tint = winrt::make_self<ColorTintEffect>(m_level);
-        auto composite = winrt::make_self<CompositeEffect>();
-        composite->m_src0 = blur.as<ge::IGraphicsEffectSource>();
-        composite->m_src1 = tint.as<ge::IGraphicsEffectSource>();
-        if (withSheen) {
-            composite->m_src2 = comp::CompositionEffectSourceParameter(L"Sheen");
+        blur->m_blur = blurAmount;
+        ge::IGraphicsEffectSource base = blur.as<ge::IGraphicsEffectSource>();
+        if (adaptive) {
+            auto lumaBlur = winrt::make_self<GaussianBlurEffect>();
+            lumaBlur->m_name = L"LumaBlur";
+            lumaBlur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
+            lumaBlur->m_blur = blurAmount;
+            // Only blown-out areas are darkened: 0 below ~60% luma, ~22% black at 75%, ~60% at pure white.
+            // Everything below the threshold keeps its full contrast so the wallpaper stays visible.
+            auto luma = winrt::make_self<LumaDarkenEffect>(1.5f, 0.6f);
+            luma->m_source = lumaBlur.as<ge::IGraphicsEffectSource>();
+            auto adapt = winrt::make_self<CompositeEffect>();
+            adapt->m_name = L"Adaptive";
+            adapt->m_src0 = base;
+            adapt->m_src1 = luma.as<ge::IGraphicsEffectSource>();
+            base = adapt.as<ge::IGraphicsEffectSource>();
+        }
+        ge::IGraphicsEffectSource root = base;
+        if (m_look != GlassLook::Plain) {
+            auto composite = winrt::make_self<CompositeEffect>();
+            composite->m_src0 = base;
+            if (m_look == GlassLook::Lit) {
+                composite->m_src1 = comp::CompositionEffectSourceParameter(L"Sheen");
+            } else {
+                composite->m_src1 = winrt::make_self<ColorTintEffect>(kSmokeAlpha).as<ge::IGraphicsEffectSource>();
+            }
+            root = composite.as<ge::IGraphicsEffectSource>();
         }
 
-        auto effectBrush = m_compositor.CreateEffectFactory(composite.as<ge::IGraphicsEffect>()).CreateBrush();
+        auto effectBrush = m_compositor.CreateEffectFactory(root.as<ge::IGraphicsEffect>()).CreateBrush();
         effectBrush.SetSourceParameter(L"Backdrop", m_compositor.CreateBackdropBrush());
-        if (withSheen) {
+        if (m_look == GlassLook::Lit) {
             effectBrush.SetSourceParameter(L"Sheen", MakeSheen());
         }
         return effectBrush;
@@ -370,17 +467,13 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
 
     void OnConnected() {
         if (CompositionBrush() || !m_compositor) return;
-        if (m_sheen) {
-            // Fall back to the plain glass if the 3-layer graph is rejected, never to nothing.
+        // If the auto-contrast graph is rejected, fall back to the same glass without it, never to nothing.
+        for (bool adaptive : {true, false}) {
             try {
-                CompositionBrush(BuildBrush(true));
+                CompositionBrush(BuildBrush(adaptive));
                 return;
             } catch (...) {
             }
-        }
-        try {
-            CompositionBrush(BuildBrush(false));
-        } catch (...) {
         }
     }
 
@@ -390,20 +483,63 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     }
 };
 
-static media::Brush MakePuwGlass(xaml::DependencyObject const& obj, float blur = 12.0f, bool sheen = false) {
-    int level = ReadGlassConfig().level;
+static media::Brush MakePuwGlass(xaml::DependencyObject const& obj, GlassLook look = GlassLook::Plain) {
     try {
         if (auto el = obj.try_as<xaml::UIElement>()) {
             auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
             if (visual) {
                 if (auto compositor = visual.Compositor()) {
-                    return winrt::make<PuwGlassBrush>(compositor, level, blur, sheen);
+                    return winrt::make<PuwGlassBrush>(compositor, look);
                 }
             }
         }
     } catch (...) {
     }
-    return media::SolidColorBrush(FallbackColorForLevel(level));
+    return media::SolidColorBrush(FallbackGlassColor());
+}
+
+// Average brightness (0..1) of the strip of the primary screen just above the taskbar, where the taskbar
+// context menus open, from a tiny downscale of the composed desktop. Native acrylic cannot take the glass's
+// per-pixel auto-contrast layer, so the context menus use this single measured value for the same purpose.
+static float SampleMenuBackdropLuma() {
+    constexpr int kW = 24;
+    constexpr int kH = 8;
+    float luma = 0.5f;
+    int const sw = GetSystemMetrics(SM_CXSCREEN);
+    int const sh = GetSystemMetrics(SM_CYSCREEN);
+    HDC screen = GetDC(nullptr);
+    if (!screen) return luma;
+    HDC mem = CreateCompatibleDC(screen);
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = kW;
+    bi.bmiHeader.biHeight = -kH;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (mem && bmp && bits) {
+        HGDIOBJ old = SelectObject(mem, bmp);
+        SetStretchBltMode(mem, HALFTONE);
+        SetBrushOrgEx(mem, 0, 0, nullptr);
+        int const y0 = sh * 55 / 100;
+        int const y1 = sh * 95 / 100;
+        if (StretchBlt(mem, 0, 0, kW, kH, screen, 0, y0, sw, y1 - y0, SRCCOPY)) {
+            auto const* px = static_cast<uint32_t const*>(bits);
+            double sum = 0.0;
+            for (int i = 0; i < kW * kH; ++i) {
+                uint32_t p = px[i];
+                sum += 0.2126 * ((p >> 16) & 0xFF) + 0.7152 * ((p >> 8) & 0xFF) + 0.0722 * (p & 0xFF);
+            }
+            luma = static_cast<float>(sum / (kW * kH) / 255.0);
+        }
+        SelectObject(mem, old);
+    }
+    if (bmp) DeleteObject(bmp);
+    if (mem) DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return luma;
 }
 
 static media::SolidColorBrush MakePuwBorder() {
@@ -411,9 +547,10 @@ static media::SolidColorBrush MakePuwBorder() {
     return media::SolidColorBrush(winrt::Windows::UI::Color{38, 255, 255, 255});
 }
 
-static media::LinearGradientBrush MakeGlassSlabRim() {
+static media::LinearGradientBrush MakeGlassSlabRim(float strength = 1.0f) {
     // Glass thickness cue shared by Frosted and Crystal Clear pills: bright catch-light on top,
     // the side walls turn dark (light passing through the slab edge), then a bottom bounce.
+    // `strength` scales every alpha: the blurred Frosted pill reads brighter than the clear one, so its rim is softer.
     media::LinearGradientBrush rim;
     rim.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
     rim.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
@@ -421,7 +558,7 @@ static media::LinearGradientBrush MakeGlassSlabRim() {
     auto addStop = [&](double offset, uint8_t a, uint8_t rgb) {
         media::GradientStop stop;
         stop.Offset(offset);
-        stop.Color(winrt::Windows::UI::Color{a, rgb, rgb, rgb});
+        stop.Color(winrt::Windows::UI::Color{static_cast<uint8_t>(a * strength + 0.5f), rgb, rgb, rgb});
         rim.GradientStops().Append(stop);
     };
     addStop(0.00, 150, 255); // ~59% top catch-light
@@ -434,25 +571,16 @@ static media::LinearGradientBrush MakeGlassSlabRim() {
 }
 
 static media::LinearGradientBrush MakeCrystalClearBackground() {
-    // Fully transparent (zero blur) with a classic glossy reflection band across the upper glass plane
-    // and a subtle specular sheen along the bottom shelf edge.
+    // Zero blur: the clear glass is just the shared surface lighting over the untouched backdrop.
     media::LinearGradientBrush bg;
     bg.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
     bg.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
-
-    // Real clear glass: a soft surface sheen that fades out (no hard split), a ~4% neutral
-    // dim in the core so icons keep contrast on bright wallpapers, and a faint lower bounce.
-    auto addStop = [&](double offset, uint8_t a, uint8_t rgb) {
+    for (auto const& s : kGlassSurface) {
         media::GradientStop stop;
-        stop.Offset(offset);
-        stop.Color(winrt::Windows::UI::Color{a, rgb, rgb, rgb});
+        stop.Offset(s.offset);
+        stop.Color(winrt::Windows::UI::Color{s.alpha, s.rgb, s.rgb, s.rgb});
         bg.GradientStops().Append(stop);
-    };
-    addStop(0.00, 56, 255); // ~22% sheen right under the top edge
-    addStop(0.22, 20, 255); // ~8% sheen fading softly
-    addStop(0.55, 10, 0);   // ~4% neutral dim in the clear core
-    addStop(0.85, 8, 0);    // ~3% dim
-    addStop(1.00, 20, 255); // ~8% faint bottom bounce
+    }
     return bg;
 }
 
@@ -464,11 +592,11 @@ static media::Brush MakeTaskbarPillBackground(xaml::DependencyObject const& obj,
         return MakeCrystalClearBackground();
     }
     if (style == STYLE_FLAT_FROSTED) {
-        return MakePuwGlass(obj);
+        return MakePuwGlass(obj, GlassLook::Smoke);
     }
-    // Frosted pill: light blur so background shapes stay readable through the ~48px pill, plus
-    // a surface sheen so it reads as a lit glass slab. Popups keep the default MakePuwGlass.
-    return MakePuwGlass(obj, 8.0f, true);
+    // Frosted pill: the shared light blur (the macOS dock glass stays quite see-through) plus the
+    // shared surface lighting so it reads as a lit glass slab.
+    return MakePuwGlass(obj, GlassLook::Lit);
 }
 
 static media::LinearGradientBrush MakeHairlineCatchRim() {
@@ -498,7 +626,7 @@ static media::Brush MakeTaskbarPillBorder(int style) {
     if (style == STYLE_FLAT_FROSTED) {
         return MakeHairlineCatchRim();
     }
-    return MakeGlassSlabRim();
+    return MakeGlassSlabRim(style == STYLE_CRYSTAL_CLEAR ? 1.0f : 0.6f);
 }
 
 static xaml::Thickness TaskbarPillBorderThickness(int style) {
@@ -825,7 +953,7 @@ private:
         }
     }
 
-    void StyleNativeAcrylicInPlace(media::AcrylicBrush const& ac, int level) {
+    void StyleNativeAcrylicInPlace(media::AcrylicBrush const& ac) {
         try {
             {
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -837,19 +965,15 @@ private:
                 });
             }
             ac.AlwaysUseFallback(false);
-            if (level == 0) {
-                ac.TintColor(winrt::Windows::UI::Color{255, 24, 30, 44});
-                ac.TintOpacity(0.18);
-                ac.TintLuminosityOpacity(0.22);
-            } else if (level == 1) {
-                ac.TintColor(winrt::Windows::UI::Color{255, 18, 24, 36});
-                ac.TintOpacity(0.40);
-                ac.TintLuminosityOpacity(0.42);
-            } else {
-                ac.TintColor(winrt::Windows::UI::Color{255, 14, 18, 26});
-                ac.TintOpacity(0.62);
-                ac.TintLuminosityOpacity(0.65);
-            }
+            // Same idea as the glass's auto contrast, with one value measured from the desktop: a neutral dark
+            // veil that stays light on dark wallpapers and gets denser as the wallpaper gets brighter. A neutral
+            // tint and a low luminosity opacity keep it from turning the wallpaper's hue into a dark brown/blue.
+            float const luma = SampleMenuBackdropLuma();
+            float const over = luma > 0.55f ? luma - 0.55f : 0.0f;
+            double const veil = std::clamp(0.12 + 1.5 * over, 0.12, 0.70);
+            ac.TintColor(winrt::Windows::UI::Color{255, 12, 14, 18});
+            ac.TintOpacity(veil);
+            ac.TintLuminosityOpacity(0.10);
         } catch (...) {
         }
     }
@@ -1466,13 +1590,16 @@ private:
             return;
         }
 
-        // 5b. Adjust System Tray right-click MenuFlyoutPresenter's existing AcrylicBrush in-place (keeps native click hit-testing intact)
+        // 5b. Context menus (system tray right-click, Start button Win+X): keep the native AcrylicBrush and tune
+        // it in place. Nothing else works here: the composition glass as the menu's Background makes the items
+        // unclickable (confirmed on a freshly restarted Explorer), and placed behind the menu it finds nothing to
+        // blur (tried with the plain and the host backdrop, with and without a native acrylic to enable it). So
+        // this menu has the native blur and a fixed tint, without the per-pixel auto contrast.
         if (type == L"Windows.UI.Xaml.Controls.MenuFlyoutPresenter") {
-            int level = ReadGlassConfig().level;
             try {
                 if (auto ctrl = obj.try_as<controls::Control>()) {
                     if (auto ac = ctrl.Background().try_as<media::AcrylicBrush>()) {
-                        StyleNativeAcrylicInPlace(ac, level);
+                        StyleNativeAcrylicInPlace(ac);
                     }
                 }
             } catch (...) {
@@ -1673,12 +1800,12 @@ private:
         std::vector<SavedTranslation> translations;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            acrylics.swap(m_savedAcrylics);
             translations.swap(m_savedTranslations);
             callbacks.swap(m_propCallbacks);
             sizeCallbacks.swap(m_sizeCallbacks);
             childVisuals.swap(m_childVisualTargets);
             implicits.swap(m_implicitTargets);
-            acrylics.swap(m_savedAcrylics);
             items.swap(m_saved);
         }
         for (auto& sc : sizeCallbacks) {
@@ -1727,17 +1854,6 @@ private:
             } catch (...) {
             }
         }
-        for (auto& t : translations) {
-            try {
-                if (auto el = t.el.get()) {
-                    auto original = t.original;
-                    RunOnObjectThread(el, [el, original]() {
-                        try { el.Translation(original); } catch (...) {}
-                    });
-                }
-            } catch (...) {
-            }
-        }
         for (auto it = acrylics.rbegin(); it != acrylics.rend(); ++it) {
             try {
                 if (auto ac = it->brush.get()) {
@@ -1748,6 +1864,17 @@ private:
                         ac.TintColor(tintColor);
                         ac.TintOpacity(tintOpacity);
                         ac.TintLuminosityOpacity(tintLum);
+                    });
+                }
+            } catch (...) {
+            }
+        }
+        for (auto& t : translations) {
+            try {
+                if (auto el = t.el.get()) {
+                    auto original = t.original;
+                    RunOnObjectThread(el, [el, original]() {
+                        try { el.Translation(original); } catch (...) {}
                     });
                 }
             } catch (...) {
@@ -2040,9 +2167,9 @@ private:
     std::unordered_map<InstanceHandle, ElementMeta> m_meta;
     std::vector<TrackedElement> m_tracked;
     std::vector<SavedProp> m_saved;
-    std::vector<SavedAcrylic> m_savedAcrylics;
     std::vector<SavedPropCallback> m_propCallbacks;
     std::vector<SavedSizeCallback> m_sizeCallbacks;
+    std::vector<SavedAcrylic> m_savedAcrylics;
     std::vector<winrt::weak_ref<xaml::UIElement>> m_implicitTargets;
     std::vector<winrt::weak_ref<xaml::UIElement>> m_childVisualTargets;
     std::vector<SavedTranslation> m_savedTranslations;

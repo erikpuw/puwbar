@@ -38,9 +38,6 @@ const CMD_LANG_VI: u32 = 1003;
 const CMD_LANG_EN: u32 = 1004;
 const CMD_ABOUT: u32 = 1005;
 const CMD_EXIT: u32 = 1006;
-const CMD_TINT_LIGHT: u32 = 1007;
-const CMD_TINT_BALANCED: u32 = 1008;
-const CMD_TINT_HIGH: u32 = 1009;
 const CMD_SURF_START_MENU: u32 = 1010;
 const CMD_SURF_CONTROL_CENTER: u32 = 1011;
 const CMD_SURF_NOTIFICATIONS: u32 = 1012;
@@ -56,7 +53,6 @@ const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "PuwBar";
 const APP_KEY: &str = "Software\\PuwBar";
 const LANG_VALUE: &str = "Language";
-const DARK_TINT_VALUE: &str = "DarkTint";
 const SURFACES_VALUE: &str = "Surfaces";
 const STYLE_VALUE: &str = "Style";
 
@@ -138,23 +134,6 @@ unsafe fn save_lang(lang: Lang) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GlassContrast {
-    Light = 0,
-    Balanced = 1,
-    High = 2,
-}
-
-impl GlassContrast {
-    fn from_u32(v: u32) -> Self {
-        match v {
-            0 => Self::Light,
-            1 => Self::Balanced,
-            _ => Self::High,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TaskbarStyle {
     FrostedGlass = 0,
     CrystalClear = 1,
@@ -173,14 +152,14 @@ impl TaskbarStyle {
     }
 }
 
-fn format_glass_cfg(level: GlassContrast, surfaces: u32, style: TaskbarStyle) -> String {
-    format!("{}:{:02x}:{}", level as u32, surfaces & SURF_ALL, style as u32)
+fn format_glass_cfg(surfaces: u32, style: TaskbarStyle) -> String {
+    format!("{:02x}:{}", surfaces & SURF_ALL, style as u32)
 }
 
-fn sync_glass_cfg_file(level: GlassContrast, surfaces: u32, style: TaskbarStyle) {
+fn sync_glass_cfg_file(surfaces: u32, style: TaskbarStyle) {
     static ACL_GRANTED: std::sync::Once = std::sync::Once::new();
     let cfg = std::env::temp_dir().join("puwbar_dark_tint.cfg");
-    if std::fs::write(&cfg, format_glass_cfg(level, surfaces, style)).is_ok() {
+    if std::fs::write(&cfg, format_glass_cfg(surfaces, style)).is_ok() {
         ACL_GRANTED.call_once(|| grant_appcontainer_read(&cfg));
     }
 }
@@ -226,10 +205,6 @@ unsafe fn save_reg_dword(value_name: &str, val: u32) {
     }
 }
 
-unsafe fn read_glass_contrast() -> GlassContrast {
-    GlassContrast::from_u32(read_reg_dword(DARK_TINT_VALUE, GlassContrast::High as u32))
-}
-
 unsafe fn read_surfaces_mask() -> u32 {
     read_reg_dword(SURFACES_VALUE, SURF_ALL) & SURF_ALL
 }
@@ -238,20 +213,15 @@ unsafe fn read_taskbar_style() -> TaskbarStyle {
     TaskbarStyle::from_u32(read_reg_dword(STYLE_VALUE, TaskbarStyle::FrostedGlass as u32))
 }
 
-unsafe fn save_glass_contrast(level: GlassContrast) {
-    save_reg_dword(DARK_TINT_VALUE, level as u32);
-    sync_glass_cfg_file(level, read_surfaces_mask(), read_taskbar_style());
-}
-
 unsafe fn save_surfaces_mask(mask: u32) {
     let clean = mask & SURF_ALL;
     save_reg_dword(SURFACES_VALUE, clean);
-    sync_glass_cfg_file(read_glass_contrast(), clean, read_taskbar_style());
+    sync_glass_cfg_file(clean, read_taskbar_style());
 }
 
 unsafe fn save_taskbar_style(style: TaskbarStyle) {
     save_reg_dword(STYLE_VALUE, style as u32);
-    sync_glass_cfg_file(read_glass_contrast(), read_surfaces_mask(), style);
+    sync_glass_cfg_file(read_surfaces_mask(), style);
 }
 
 type InitXamlDiagExFn = unsafe extern "system" fn(
@@ -762,7 +732,6 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     let lang = read_lang();
     let autostart = is_autostart_enabled();
     let style = read_taskbar_style();
-    let contrast = read_glass_contrast();
     let surfaces = read_surfaces_mask();
     let (
         lbl_auto,
@@ -771,10 +740,6 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         lbl_style_clear,
         lbl_style_reflect,
         lbl_style_flat,
-        lbl_tint,
-        lbl_light,
-        lbl_balanced,
-        lbl_high,
         lbl_surfaces,
         lbl_notif,
         lbl_cal,
@@ -791,10 +756,6 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             "Kính trong suốt",
             "Không viền (Phản chiếu icon)",
             "Kính mờ phẳng",
-            "Độ tối lớp kính",
-            "Trong nhẹ (24%)",
-            "Cân bằng (45%)",
-            "Tương phản cao (62%)",
             "Khu vực áp kính",
             "Thông báo",
             "Lịch",
@@ -811,10 +772,6 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             "Crystal Clear",
             "Borderless (Icon Reflection)",
             "Flat Frosted",
-            "Glass contrast",
-            "Light (24%)",
-            "Balanced (45%)",
-            "High contrast (62%)",
             "Glass surfaces",
             "Notifications",
             "Calendar",
@@ -847,22 +804,6 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             );
         }
         AppendMenuW(menu, MF_POPUP, style_menu as usize, wide(lbl_style).as_ptr());
-    }
-    let tint_menu = CreatePopupMenu();
-    if !tint_menu.is_null() {
-        for (level, cmd, label) in [
-            (GlassContrast::Light, CMD_TINT_LIGHT, lbl_light),
-            (GlassContrast::Balanced, CMD_TINT_BALANCED, lbl_balanced),
-            (GlassContrast::High, CMD_TINT_HIGH, lbl_high),
-        ] {
-            AppendMenuW(
-                tint_menu,
-                MF_STRING | if contrast == level { MF_CHECKED } else { MF_UNCHECKED },
-                cmd as usize,
-                wide(label).as_ptr(),
-            );
-        }
-        AppendMenuW(menu, MF_POPUP, tint_menu as usize, wide(lbl_tint).as_ptr());
     }
     let surf_menu = CreatePopupMenu();
     if !surf_menu.is_null() {
@@ -950,18 +891,6 @@ unsafe fn show_tray_menu(hwnd: HWND) {
                 _ => TaskbarStyle::FrostedGlass,
             };
             save_taskbar_style(next);
-            let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
-            if !reload.is_null() {
-                SetEvent(reload);
-            }
-        }
-        CMD_TINT_LIGHT | CMD_TINT_BALANCED | CMD_TINT_HIGH => {
-            let next = match choice {
-                CMD_TINT_LIGHT => GlassContrast::Light,
-                CMD_TINT_BALANCED => GlassContrast::Balanced,
-                _ => GlassContrast::High,
-            };
-            save_glass_contrast(next);
             let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
             if !reload.is_null() {
                 SetEvent(reload);
@@ -1090,12 +1019,8 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
             ShowWindow(tray, SW_SHOWNA);
         }
 
-        // Sync persisted glass contrast preset, enabled surfaces & taskbar style for both Explorer and AppContainer hosts before attaching.
-        sync_glass_cfg_file(
-            read_glass_contrast(),
-            read_surfaces_mask(),
-            read_taskbar_style(),
-        );
+        // Sync persisted enabled surfaces & taskbar style for both Explorer and AppContainer hosts before attaching.
+        sync_glass_cfg_file(read_surfaces_mask(), read_taskbar_style());
 
         // Boost priority during initial attach so PuwBar styles Explorer as soon as XAML initializes.
         let proc = GetCurrentProcess();
@@ -1202,31 +1127,18 @@ mod tests {
     }
 
     #[test]
-    fn glass_contrast_presets_encode_and_parse() {
-        assert_eq!(GlassContrast::from_u32(0), GlassContrast::Light);
-        assert_eq!(GlassContrast::from_u32(1), GlassContrast::Balanced);
-        assert_eq!(GlassContrast::from_u32(2), GlassContrast::High);
-        assert_eq!(GlassContrast::from_u32(99), GlassContrast::High);
+    fn taskbar_style_and_glass_cfg_encode_and_parse() {
         assert_eq!(TaskbarStyle::from_u32(0), TaskbarStyle::FrostedGlass);
         assert_eq!(TaskbarStyle::from_u32(1), TaskbarStyle::CrystalClear);
         assert_eq!(TaskbarStyle::from_u32(2), TaskbarStyle::IconReflect);
         assert_eq!(TaskbarStyle::from_u32(3), TaskbarStyle::FlatFrosted);
         assert_eq!(TaskbarStyle::from_u32(99), TaskbarStyle::FrostedGlass);
+        assert_eq!(format_glass_cfg(SURF_ALL, TaskbarStyle::FrostedGlass), "7f:0");
         assert_eq!(
-            format_glass_cfg(GlassContrast::Light, SURF_ALL, TaskbarStyle::FrostedGlass),
-            "0:7f:0"
+            format_glass_cfg(SURF_START_MENU | SURF_CALENDAR, TaskbarStyle::CrystalClear),
+            "09:1"
         );
-        assert_eq!(
-            format_glass_cfg(
-                GlassContrast::Balanced,
-                SURF_START_MENU | SURF_CALENDAR,
-                TaskbarStyle::CrystalClear
-            ),
-            "1:09:1"
-        );
-        assert_eq!(
-            format_glass_cfg(GlassContrast::High, 0, TaskbarStyle::IconReflect),
-            "2:00:2"
-        );
+        assert_eq!(format_glass_cfg(0, TaskbarStyle::IconReflect), "00:2");
+        assert_eq!(format_glass_cfg(SURF_ALL, TaskbarStyle::FlatFrosted), "7f:3");
     }
 }

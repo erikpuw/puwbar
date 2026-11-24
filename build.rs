@@ -61,7 +61,7 @@ fn main() {
     let built_dll = out_dir.join("puwbar_tap.dll");
     let bat = out_dir.join("build_tap.bat");
     let script = format!(
-        "@echo off\r\ncall \"{}\" >nul\r\nrc.exe /nologo /fo \"{}\" \"{}\" || exit /b 1\r\ncl.exe /nologo /std:c++20 /EHsc {} /MT /LD /DUNICODE /D_UNICODE \"{}\" /Fe:\"{}\" /Fo:\"{}\" /link /DEF:\"{}\" windowsapp.lib ole32.lib user32.lib dxguid.lib\r\n",
+        "@echo off\r\ncall \"{}\" >nul\r\nrc.exe /nologo /fo \"{}\" \"{}\" || exit /b 1\r\ncl.exe /nologo /std:c++20 /EHsc {} /MT /LD /DUNICODE /D_UNICODE \"{}\" /Fe:\"{}\" /Fo:\"{}\" /link /DEF:\"{}\" windowsapp.lib ole32.lib user32.lib gdi32.lib dxguid.lib\r\n",
         vcvars.display(),
         res.display(),
         rc.display(),
