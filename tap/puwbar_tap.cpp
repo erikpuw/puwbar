@@ -316,9 +316,11 @@ static winrt::Windows::UI::Color FallbackColorForLevel(int level) {
 struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     comp::Compositor m_compositor{nullptr};
     int m_level = 2;
+    float m_blur = 12.0f;
+    float m_frost = 0.0f; // premultiplied white scatter layered over the tint (0 = none)
 
-    explicit PuwGlassBrush(comp::Compositor compositor, int level)
-        : m_compositor(std::move(compositor)), m_level(level) {
+    PuwGlassBrush(comp::Compositor compositor, int level, float blur = 12.0f, float frost = 0.0f)
+        : m_compositor(std::move(compositor)), m_level(level), m_blur(blur), m_frost(frost) {
         FallbackColor(FallbackColorForLevel(level));
     }
 
@@ -329,7 +331,10 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
 
                 auto blur = winrt::make_self<GaussianBlurEffect>();
                 blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
+                blur->m_blur = m_blur;
                 auto tint = winrt::make_self<ColorTintEffect>(m_level);
+                // Milky frost over the tint, folded into the same flood (premultiplied source-over).
+                for (float& c : tint->m_color) c = m_frost + c * (1.0f - m_frost);
                 auto composite = winrt::make_self<CompositeEffect>();
                 composite->m_src0 = blur.as<ge::IGraphicsEffectSource>();
                 composite->m_src1 = tint.as<ge::IGraphicsEffectSource>();
@@ -349,14 +354,14 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     }
 };
 
-static media::Brush MakePuwGlass(xaml::DependencyObject const& obj) {
+static media::Brush MakePuwGlass(xaml::DependencyObject const& obj, float blur = 12.0f, float frost = 0.0f) {
     int level = ReadGlassConfig().level;
     try {
         if (auto el = obj.try_as<xaml::UIElement>()) {
             auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
             if (visual) {
                 if (auto compositor = visual.Compositor()) {
-                    return winrt::make<PuwGlassBrush>(compositor, level);
+                    return winrt::make<PuwGlassBrush>(compositor, level, blur, frost);
                 }
             }
         }
@@ -371,23 +376,24 @@ static media::SolidColorBrush MakePuwBorder() {
 }
 
 static media::LinearGradientBrush MakePuwSpecularRim() {
-    // Apple-style hairline catch-light: delicate ~28% top edge, whisper-thin ~10% sides, subtle ~20% bottom bounce.
-    // Depth comes from ThemeShadow elevation underneath, not a thick painted border.
+    // Frosted slab edge: bright top catch-light, softly darker side walls (frost scatters more
+    // light than clear glass, so the walls stay lighter than the crystal rim), bottom bounce.
     media::LinearGradientBrush rim;
     rim.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
     rim.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
 
-    auto addStop = [&](double offset, uint8_t a) {
+    auto addStop = [&](double offset, uint8_t a, uint8_t rgb) {
         media::GradientStop stop;
         stop.Offset(offset);
-        stop.Color(winrt::Windows::UI::Color{a, 255, 255, 255});
+        stop.Color(winrt::Windows::UI::Color{a, rgb, rgb, rgb});
         rim.GradientStops().Append(stop);
     };
-    addStop(0.00, 71); // ~28% crisp hairline catch-light along top edge
-    addStop(0.18, 30); // ~12% gentle shoulder taper
-    addStop(0.55, 26); // ~10% whisper-thin side edge (zero heavy frame look)
-    addStop(0.88, 33); // ~13% lower curve
-    addStop(1.00, 51); // ~20% soft bottom bounce
+    addStop(0.00, 130, 255); // ~51% top catch-light
+    addStop(0.14, 40, 255);  // ~16% shoulder
+    addStop(0.45, 22, 0);    // ~9% side wall
+    addStop(0.78, 16, 0);    // ~6% side wall
+    addStop(0.93, 34, 255);  // ~13% lower curve
+    addStop(1.00, 76, 255);  // ~30% bottom bounce
     return rim;
 }
 
@@ -398,17 +404,19 @@ static media::LinearGradientBrush MakeCrystalClearBackground() {
     bg.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
     bg.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
 
-    auto addStop = [&](double offset, uint8_t a) {
+    // Real clear glass: a soft surface sheen that fades out (no hard split), a ~4% neutral
+    // dim in the core so icons keep contrast on bright wallpapers, and a faint lower bounce.
+    auto addStop = [&](double offset, uint8_t a, uint8_t rgb) {
         media::GradientStop stop;
         stop.Offset(offset);
-        stop.Color(winrt::Windows::UI::Color{a, 255, 255, 255});
+        stop.Color(winrt::Windows::UI::Color{a, rgb, rgb, rgb});
         bg.GradientStops().Append(stop);
     };
-    addStop(0.00, 48); // ~19% top crystal reflection sheen
-    addStop(0.42, 14); // ~5% smooth glossy upper half
-    addStop(0.46, 0);  // 0% crisp reflection split (completely transparent core)
-    addStop(0.84, 5);  // ~2% nearly invisible lower clear glass
-    addStop(1.00, 28); // ~11% soft bottom shelf reflection
+    addStop(0.00, 56, 255); // ~22% sheen right under the top edge
+    addStop(0.22, 20, 255); // ~8% sheen fading softly
+    addStop(0.55, 10, 0);   // ~4% neutral dim in the clear core
+    addStop(0.85, 8, 0);    // ~3% dim
+    addStop(1.00, 20, 255); // ~8% faint bottom bounce
     return bg;
 }
 
@@ -418,17 +426,20 @@ static media::LinearGradientBrush MakeCrystalClearRim() {
     rim.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
     rim.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
 
-    auto addStop = [&](double offset, uint8_t a) {
+    // Glass thickness cue: bright catch-light on top, the side walls turn dark (light passing
+    // through the slab edge), then a secondary bounce along the bottom.
+    auto addStop = [&](double offset, uint8_t a, uint8_t rgb) {
         media::GradientStop stop;
         stop.Offset(offset);
-        stop.Color(winrt::Windows::UI::Color{a, 255, 255, 255});
+        stop.Color(winrt::Windows::UI::Color{a, rgb, rgb, rgb});
         rim.GradientStops().Append(stop);
     };
-    addStop(0.00, 104); // ~41% bright crystal top edge
-    addStop(0.20, 40);  // ~16% shoulder
-    addStop(0.55, 34);  // ~13% clean side contour
-    addStop(0.88, 42);  // ~16% lower curve
-    addStop(1.00, 68);  // ~27% reflective bottom rim
+    addStop(0.00, 150, 255); // ~59% crisp top catch-light
+    addStop(0.12, 46, 255);  // ~18% shoulder
+    addStop(0.40, 36, 0);    // ~14% dark side wall
+    addStop(0.75, 28, 0);    // ~11% dark side wall
+    addStop(0.92, 40, 255);  // ~16% lower curve
+    addStop(1.00, 90, 255);  // ~35% bottom bounce
     return rim;
 }
 
@@ -439,7 +450,9 @@ static media::Brush MakeTaskbarPillBackground(xaml::DependencyObject const& obj,
     if (style == STYLE_CRYSTAL_CLEAR) {
         return MakeCrystalClearBackground();
     }
-    return MakePuwGlass(obj);
+    // Frosted pill: light blur (background shapes stay readable through the ~48px pill) plus a
+    // ~4% milky white scatter, so it reads as etched glass. Popups keep the default MakePuwGlass.
+    return MakePuwGlass(obj, 8.0f, 0.04f);
 }
 
 static media::Brush MakeTaskbarPillBorder(int style) {
@@ -456,8 +469,7 @@ static xaml::Thickness TaskbarPillBorderThickness(int style) {
     if (style == STYLE_ICON_REFLECT) {
         return xaml::Thickness{0.0, 0.0, 0.0, 0.0};
     }
-    double t = (style == STYLE_CRYSTAL_CLEAR) ? 0.75 : 0.65;
-    return xaml::Thickness{t, t, t, t};
+    return xaml::Thickness{1.0, 1.0, 1.0, 1.0};
 }
 
 static float TaskbarPillShadowZ(int style) {
@@ -1004,10 +1016,14 @@ private:
         comp::SpriteVisual sprite{nullptr};
     };
 
+    // Floor reflection tuning.
+    static constexpr float kReflScaleY = 0.85f;  // vertical squash of the mirrored slice
+    static constexpr float kReflIconGap = 2.5f;  // small clearance over the running-app indicator
+    static constexpr float kReflDateGap = 0.8f;  // clock date line has no indicator below it
+
     static ReflectionBand CreateReflectionBand(
         comp::Compositor const& compositor,
         comp::Visual const& sourceVisual,
-        float scaleY,
         float maskEndY) {
         auto visSurface = compositor.CreateVisualSurface();
         visSurface.SourceVisual(sourceVisual);
@@ -1016,6 +1032,7 @@ private:
         surfBrush.Stretch(comp::CompositionStretch::Fill);
         surfBrush.BitmapInterpolationMode(comp::CompositionBitmapInterpolationMode::Linear);
 
+        // No blur: on 18-24px icons it dissolves the mirror; the gradient fade gives the softness.
         auto gradMask = compositor.CreateLinearGradientBrush();
         gradMask.MappingMode(comp::CompositionMappingMode::Relative);
         gradMask.StartPoint(num::float2{0.5f, 1.0f});
@@ -1030,7 +1047,7 @@ private:
 
         auto sprite = compositor.CreateSpriteVisual();
         sprite.Brush(maskBrush);
-        sprite.Scale(num::float3{1.0f, -scaleY, 1.0f});
+        sprite.Scale(num::float3{1.0f, -kReflScaleY, 1.0f});
         return ReflectionBand{visSurface, sprite};
     }
 
@@ -1042,8 +1059,8 @@ private:
         float width,
         float sliceTop,
         float sliceH,
-        float gapPx,
-        float scaleY) {
+        float gapPx) {
+        constexpr float scaleY = kReflScaleY;
         if (width <= 1.0f || sliceH <= 2.0f) {
             band.sprite.IsVisible(false);
             return;
@@ -1074,7 +1091,7 @@ private:
             if (!isSystemTray) {
                 float iconTop = (rh - 24.0f) * 0.5f;
                 if (iconTop < 0.0f) iconTop = 0.0f;
-                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, 24.0f, 1.2f, 0.85f);
+                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, 24.0f, kReflIconGap);
                 return true;
             }
 
@@ -1087,16 +1104,16 @@ private:
             if (clk.found && clk.right > clk.left && clk.dateHeight > 4.0f) {
                 float cL = (clk.left < 0.0f) ? 0.0f : clk.left;
                 float cR = (clk.right > rw) ? rw : clk.right;
-                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, cL, iconTop, iconSliceH, 1.2f, 0.85f);
+                PlaceBand(leftBand, pt.X, pt.Y, 0.0f, cL, iconTop, iconSliceH, kReflIconGap);
 
                 // Reflect only the bottom date line (DateInnerTextBlock) right beneath its baseline with clean air gap.
-                PlaceBand(clockBand, pt.X, pt.Y, cL, cR - cL, clk.dateTop, clk.dateHeight, 0.8f, 0.80f);
+                PlaceBand(clockBand, pt.X, pt.Y, cL, cR - cL, clk.dateTop, clk.dateHeight, kReflDateGap);
 
-                PlaceBand(rightBand, pt.X, pt.Y, cR, rw - cR, iconTop, iconSliceH, 1.2f, 0.85f);
+                PlaceBand(rightBand, pt.X, pt.Y, cR, rw - cR, iconTop, iconSliceH, kReflIconGap);
                 return true;
             }
 
-            PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, iconSliceH, 1.2f, 0.85f);
+            PlaceBand(leftBand, pt.X, pt.Y, 0.0f, rw, iconTop, iconSliceH, kReflIconGap);
             if (clockBand.sprite) clockBand.sprite.IsVisible(false);
             if (rightBand.sprite) rightBand.sprite.IsVisible(false);
             return false;
@@ -1124,7 +1141,7 @@ private:
             if (!compositor) return;
 
             if (!isSystemTray) {
-                auto band = CreateReflectionBand(compositor, sourceVisual, 0.85f, 0.40f);
+                auto band = CreateReflectionBand(compositor, sourceVisual, 0.40f);
                 ReflectionBand empty{};
                 UpdateStripReflectionGeometry(stripFe, stripEl, frameEl, band, empty, empty, false);
 
@@ -1155,9 +1172,9 @@ private:
 
             // System Tray: 3 independent baseline bands inside a single ContainerVisual
             auto container = compositor.CreateContainerVisual();
-            auto leftBand = CreateReflectionBand(compositor, sourceVisual, 0.85f, 0.25f);
-            auto clockBand = CreateReflectionBand(compositor, sourceVisual, 0.80f, 0.30f);
-            auto rightBand = CreateReflectionBand(compositor, sourceVisual, 0.85f, 0.25f);
+            auto leftBand = CreateReflectionBand(compositor, sourceVisual, 0.25f);
+            auto clockBand = CreateReflectionBand(compositor, sourceVisual, 0.30f);
+            auto rightBand = CreateReflectionBand(compositor, sourceVisual, 0.25f);
             container.Children().InsertAtTop(leftBand.sprite);
             container.Children().InsertAtTop(clockBand.sprite);
             container.Children().InsertAtTop(rightBand.sprite);
