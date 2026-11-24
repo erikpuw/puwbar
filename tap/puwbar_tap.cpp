@@ -269,6 +269,7 @@ struct CompositeEffect : winrt::implements<CompositeEffect, ge::IGraphicsEffect,
     winrt::hstring m_name{L"Composite"};
     ge::IGraphicsEffectSource m_src0{nullptr};
     ge::IGraphicsEffectSource m_src1{nullptr};
+    ge::IGraphicsEffectSource m_src2{nullptr}; // optional third layer (surface sheen)
 
     winrt::hstring Name() const { return m_name; }
     void Name(winrt::hstring const& v) { m_name = v; }
@@ -297,13 +298,16 @@ struct CompositeEffect : winrt::implements<CompositeEffect, ge::IGraphicsEffect,
     }
     HRESULT STDMETHODCALLTYPE GetSource(UINT index, ge_interop::IGraphicsEffectSource** source) noexcept override {
         if (!source) return E_POINTER;
-        auto const& s = (index == 0) ? m_src0 : (index == 1 ? m_src1 : ge::IGraphicsEffectSource{nullptr});
+        auto const& s = (index == 0) ? m_src0
+            : (index == 1) ? m_src1
+            : (index == 2) ? m_src2
+            : ge::IGraphicsEffectSource{nullptr};
         if (!s) return E_INVALIDARG;
         return winrt::get_unknown(s)->QueryInterface(IID_PPV_ARGS(source));
     }
     HRESULT STDMETHODCALLTYPE GetSourceCount(UINT* count) noexcept override {
         if (!count) return E_POINTER;
-        *count = 2;
+        *count = m_src2 ? 3 : 2;
         return S_OK;
     }
 };
@@ -318,33 +322,62 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     comp::Compositor m_compositor{nullptr};
     int m_level = 2;
     float m_blur = 12.0f;
-    float m_frost = 0.0f; // premultiplied white scatter layered over the tint (0 = none)
+    bool m_sheen = false; // surface sheen layer: makes the pane read as a lit glass slab
 
-    PuwGlassBrush(comp::Compositor compositor, int level, float blur = 12.0f, float frost = 0.0f)
-        : m_compositor(std::move(compositor)), m_level(level), m_blur(blur), m_frost(frost) {
+    PuwGlassBrush(comp::Compositor compositor, int level, float blur = 12.0f, bool sheen = false)
+        : m_compositor(std::move(compositor)), m_level(level), m_blur(blur), m_sheen(sheen) {
         FallbackColor(FallbackColorForLevel(level));
     }
 
+    // Soft catch-light under the top edge fading out, plus a faint bounce along the bottom
+    // (same surface lighting as the Crystal Clear background).
+    comp::CompositionLinearGradientBrush MakeSheen() const {
+        auto g = m_compositor.CreateLinearGradientBrush();
+        g.StartPoint(num::float2{0.5f, 0.0f});
+        g.EndPoint(num::float2{0.5f, 1.0f});
+        auto stop = [&](float offset, uint8_t a) {
+            g.ColorStops().Append(m_compositor.CreateColorGradientStop(offset, winrt::Windows::UI::Color{a, 255, 255, 255}));
+        };
+        stop(0.00f, 56); // ~22% sheen right under the top edge
+        stop(0.22f, 20); // ~8% fading softly
+        stop(0.50f, 0);
+        stop(0.85f, 0);
+        stop(1.00f, 20); // ~8% bottom bounce
+        return g;
+    }
+
+    comp::CompositionEffectBrush BuildBrush(bool withSheen) const {
+        auto blur = winrt::make_self<GaussianBlurEffect>();
+        blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
+        blur->m_blur = m_blur;
+        auto tint = winrt::make_self<ColorTintEffect>(m_level);
+        auto composite = winrt::make_self<CompositeEffect>();
+        composite->m_src0 = blur.as<ge::IGraphicsEffectSource>();
+        composite->m_src1 = tint.as<ge::IGraphicsEffectSource>();
+        if (withSheen) {
+            composite->m_src2 = comp::CompositionEffectSourceParameter(L"Sheen");
+        }
+
+        auto effectBrush = m_compositor.CreateEffectFactory(composite.as<ge::IGraphicsEffect>()).CreateBrush();
+        effectBrush.SetSourceParameter(L"Backdrop", m_compositor.CreateBackdropBrush());
+        if (withSheen) {
+            effectBrush.SetSourceParameter(L"Sheen", MakeSheen());
+        }
+        return effectBrush;
+    }
+
     void OnConnected() {
-        try {
-            if (!CompositionBrush() && m_compositor) {
-                auto backdrop = m_compositor.CreateBackdropBrush();
-
-                auto blur = winrt::make_self<GaussianBlurEffect>();
-                blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
-                blur->m_blur = m_blur;
-                auto tint = winrt::make_self<ColorTintEffect>(m_level);
-                // Milky frost over the tint, folded into the same flood (premultiplied source-over).
-                for (float& c : tint->m_color) c = m_frost + c * (1.0f - m_frost);
-                auto composite = winrt::make_self<CompositeEffect>();
-                composite->m_src0 = blur.as<ge::IGraphicsEffectSource>();
-                composite->m_src1 = tint.as<ge::IGraphicsEffectSource>();
-
-                auto factory = m_compositor.CreateEffectFactory(composite.as<ge::IGraphicsEffect>());
-                auto effectBrush = factory.CreateBrush();
-                effectBrush.SetSourceParameter(L"Backdrop", backdrop);
-                CompositionBrush(effectBrush);
+        if (CompositionBrush() || !m_compositor) return;
+        if (m_sheen) {
+            // Fall back to the plain glass if the 3-layer graph is rejected, never to nothing.
+            try {
+                CompositionBrush(BuildBrush(true));
+                return;
+            } catch (...) {
             }
+        }
+        try {
+            CompositionBrush(BuildBrush(false));
         } catch (...) {
         }
     }
@@ -355,14 +388,14 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     }
 };
 
-static media::Brush MakePuwGlass(xaml::DependencyObject const& obj, float blur = 12.0f, float frost = 0.0f) {
+static media::Brush MakePuwGlass(xaml::DependencyObject const& obj, float blur = 12.0f, bool sheen = false) {
     int level = ReadGlassConfig().level;
     try {
         if (auto el = obj.try_as<xaml::UIElement>()) {
             auto visual = xaml::Hosting::ElementCompositionPreview::GetElementVisual(el);
             if (visual) {
                 if (auto compositor = visual.Compositor()) {
-                    return winrt::make<PuwGlassBrush>(compositor, level, blur, frost);
+                    return winrt::make<PuwGlassBrush>(compositor, level, blur, sheen);
                 }
             }
         }
@@ -376,9 +409,9 @@ static media::SolidColorBrush MakePuwBorder() {
     return media::SolidColorBrush(winrt::Windows::UI::Color{38, 255, 255, 255});
 }
 
-static media::LinearGradientBrush MakePuwSpecularRim() {
-    // Frosted slab edge: bright top catch-light, softly darker side walls (frost scatters more
-    // light than clear glass, so the walls stay lighter than the crystal rim), bottom bounce.
+static media::LinearGradientBrush MakeGlassSlabRim() {
+    // Glass thickness cue shared by Frosted and Crystal Clear pills: bright catch-light on top,
+    // the side walls turn dark (light passing through the slab edge), then a bottom bounce.
     media::LinearGradientBrush rim;
     rim.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
     rim.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
@@ -389,12 +422,12 @@ static media::LinearGradientBrush MakePuwSpecularRim() {
         stop.Color(winrt::Windows::UI::Color{a, rgb, rgb, rgb});
         rim.GradientStops().Append(stop);
     };
-    addStop(0.00, 130, 255); // ~51% top catch-light
-    addStop(0.14, 40, 255);  // ~16% shoulder
-    addStop(0.45, 22, 0);    // ~9% side wall
-    addStop(0.78, 16, 0);    // ~6% side wall
-    addStop(0.93, 34, 255);  // ~13% lower curve
-    addStop(1.00, 76, 255);  // ~30% bottom bounce
+    addStop(0.00, 150, 255); // ~59% top catch-light
+    addStop(0.12, 46, 255);  // ~18% shoulder
+    addStop(0.40, 36, 0);    // ~14% dark side wall
+    addStop(0.75, 28, 0);    // ~11% dark side wall
+    addStop(0.92, 40, 255);  // ~16% lower curve
+    addStop(1.00, 90, 255);  // ~35% bottom bounce
     return rim;
 }
 
@@ -421,29 +454,6 @@ static media::LinearGradientBrush MakeCrystalClearBackground() {
     return bg;
 }
 
-static media::LinearGradientBrush MakeCrystalClearRim() {
-    // Crisp hairline rim tailored for fully transparent glass so pill bounds remain legible.
-    media::LinearGradientBrush rim;
-    rim.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
-    rim.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
-
-    // Glass thickness cue: bright catch-light on top, the side walls turn dark (light passing
-    // through the slab edge), then a secondary bounce along the bottom.
-    auto addStop = [&](double offset, uint8_t a, uint8_t rgb) {
-        media::GradientStop stop;
-        stop.Offset(offset);
-        stop.Color(winrt::Windows::UI::Color{a, rgb, rgb, rgb});
-        rim.GradientStops().Append(stop);
-    };
-    addStop(0.00, 150, 255); // ~59% crisp top catch-light
-    addStop(0.12, 46, 255);  // ~18% shoulder
-    addStop(0.40, 36, 0);    // ~14% dark side wall
-    addStop(0.75, 28, 0);    // ~11% dark side wall
-    addStop(0.92, 40, 255);  // ~16% lower curve
-    addStop(1.00, 90, 255);  // ~35% bottom bounce
-    return rim;
-}
-
 static media::Brush MakeTaskbarPillBackground(xaml::DependencyObject const& obj, int style) {
     if (style == STYLE_ICON_REFLECT) {
         return media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
@@ -451,19 +461,16 @@ static media::Brush MakeTaskbarPillBackground(xaml::DependencyObject const& obj,
     if (style == STYLE_CRYSTAL_CLEAR) {
         return MakeCrystalClearBackground();
     }
-    // Frosted pill: light blur (background shapes stay readable through the ~48px pill) plus a
-    // ~4% milky white scatter, so it reads as etched glass. Popups keep the default MakePuwGlass.
-    return MakePuwGlass(obj, 8.0f, 0.04f);
+    // Frosted pill: light blur so background shapes stay readable through the ~48px pill, plus
+    // a surface sheen so it reads as a lit glass slab. Popups keep the default MakePuwGlass.
+    return MakePuwGlass(obj, 8.0f, true);
 }
 
 static media::Brush MakeTaskbarPillBorder(int style) {
     if (style == STYLE_ICON_REFLECT) {
         return media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
     }
-    if (style == STYLE_CRYSTAL_CLEAR) {
-        return MakeCrystalClearRim();
-    }
-    return MakePuwSpecularRim();
+    return MakeGlassSlabRim();
 }
 
 static xaml::Thickness TaskbarPillBorderThickness(int style) {

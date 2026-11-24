@@ -43,7 +43,7 @@
 
 Chọn trong menu tray, mục **Kiểu giao diện**.
 
-**Kính mờ** (mặc định): nền phía sau nhòe nhẹ nhưng vẫn thấy hình khối, mặt kính hơi đục sữa.
+**Kính mờ** (mặc định): nền phía sau nhòe nhẹ nhưng vẫn thấy hình khối, mặt kính có vệt bóng loáng nên nhìn ra tấm kính nổi khối.
 
 ![Kiểu Kính mờ](assets/screenshots/style-frosted.png)
 

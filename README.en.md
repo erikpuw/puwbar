@@ -43,7 +43,7 @@
 
 Pick one from the tray menu under **Taskbar style**.
 
-**Frosted Glass** (default): the wallpaper behind is softly blurred but its shapes still show through, with a slightly milky surface.
+**Frosted Glass** (default): the wallpaper behind is softly blurred but its shapes still show through, and a soft sheen on the surface makes it read as a raised glass slab.
 
 ![Frosted Glass style](assets/screenshots/style-frosted.png)
 
