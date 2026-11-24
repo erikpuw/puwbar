@@ -39,6 +39,22 @@
 | ![Menu chuột phải nút Start](assets/screenshots/start-context-menu.jpg)<br>**Menu Win+X**: menu chuột phải nút Start | ![Menu chuột phải System Tray](assets/screenshots/tray-context-menu.png)<br>**Menu System Tray**: giữ nguyên bấm chọn chuột trái bình thường |
 | ![Menu tray Tiếng Việt](assets/screenshots/tray-vi.png)<br>**Menu PuwBar (Tiếng Việt)**: chỉnh độ tối lớp kính & bật/tắt từng khu vực | ![Menu tray English](assets/screenshots/tray-en.png)<br>**Menu PuwBar (English)**: đổi ngôn ngữ ngay trong menu tray |
 
+### Kiểu taskbar
+
+Chọn trong menu tray, mục **Kiểu giao diện**.
+
+**Kính mờ** (mặc định): nền phía sau nhòe nhẹ nhưng vẫn thấy hình khối, mặt kính hơi đục sữa.
+
+![Kiểu Kính mờ](assets/screenshots/style-frosted.png)
+
+**Kính trong suốt**: không làm mờ nền, chỉ giữ viền kính và vệt bóng mềm.
+
+![Kiểu Kính trong suốt](assets/screenshots/style-crystal-clear.png)
+
+**Không viền (phản chiếu icon)**: bỏ khung kính, icon in bóng xuống phía dưới như đặt trên mặt bàn kính.
+
+![Kiểu Không viền phản chiếu icon](assets/screenshots/style-borderless.png)
+
 ## Cài đặt và dùng
 
 1. Nếu đang chạy bản PuwBar cũ, hãy thoát trước khi cài (`Ctrl+Alt+F12` hoặc chọn **Thoát PuwBar** ở System Tray).

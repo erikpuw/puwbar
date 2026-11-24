@@ -39,6 +39,22 @@
 | ![Start button Win+X menu](assets/screenshots/start-context-menu.jpg)<br>**Win+X Menu**: Start button context menu | ![System Tray context menu](assets/screenshots/tray-context-menu.png)<br>**System Tray Menu**: native left-click selection preserved |
 | ![PuwBar tray menu English](assets/screenshots/tray-en.png)<br>**PuwBar Menu (English)**: glass contrast presets & per-surface toggles | ![PuwBar tray menu Vietnamese](assets/screenshots/tray-vi.png)<br>**PuwBar Menu (Vietnamese)**: switch language directly from the tray |
 
+### Taskbar styles
+
+Pick one from the tray menu under **Taskbar style**.
+
+**Frosted Glass** (default): the wallpaper behind is softly blurred but its shapes still show through, with a slightly milky surface.
+
+![Frosted Glass style](assets/screenshots/style-frosted.png)
+
+**Crystal Clear**: no blur, just the glass rim and a soft sheen.
+
+![Crystal Clear style](assets/screenshots/style-crystal-clear.png)
+
+**Borderless (icon reflection)**: no glass frame; icons cast a reflection below them, as if standing on a glass table.
+
+![Borderless icon reflection style](assets/screenshots/style-borderless.png)
+
 ## Install & usage
 
 1. If an older copy of PuwBar is currently running, exit it first (`Ctrl+Alt+F12` or **Exit PuwBar** in the System Tray).
