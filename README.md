@@ -55,7 +55,7 @@ Chọn trong menu tray, mục **Kiểu giao diện**.
 
 ![Kiểu Không viền phản chiếu icon](assets/screenshots/style-borderless.png)
 
-**Kính mờ phẳng**: giao diện kính của v1.0.6, viền trắng mảnh đều, không bóng đổ, không vệt bóng loáng.
+**Kính mờ phẳng**: giao diện kính của v1.0.7, viền bắt sáng mảnh 0.65px, không bóng đổ, không vệt bóng loáng.
 
 ![Kiểu Kính mờ phẳng](assets/screenshots/style-flat-frosted.png)
 

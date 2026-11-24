@@ -62,7 +62,7 @@ static constexpr uint32_t SURF_ALL            = 0x7Fu;
 static constexpr int STYLE_FROSTED_GLASS = 0; // Default frosted glass
 static constexpr int STYLE_CRYSTAL_CLEAR = 1; // Transparent glass with glossy reflection
 static constexpr int STYLE_ICON_REFLECT  = 2; // Completely borderless/transparent + real icon reflection
-static constexpr int STYLE_FLAT_FROSTED  = 3; // v1.0.6 look: popup glass, flat 15% hairline, no shadow
+static constexpr int STYLE_FLAT_FROSTED  = 3; // v1.0.7 look: popup glass, 0.65px catch-light rim, no shadow
 
 struct GlassConfig {
     int level = 2; // 0 = Light (24%), 1 = Balanced (45%), 2 = High contrast (62%)
@@ -471,12 +471,32 @@ static media::Brush MakeTaskbarPillBackground(xaml::DependencyObject const& obj,
     return MakePuwGlass(obj, 8.0f, true);
 }
 
+static media::LinearGradientBrush MakeHairlineCatchRim() {
+    // v1.0.7 hairline catch-light: ~28% top edge, ~10% sides, ~20% bottom bounce, all white.
+    media::LinearGradientBrush rim;
+    rim.StartPoint(winrt::Windows::Foundation::Point{0.5f, 0.0f});
+    rim.EndPoint(winrt::Windows::Foundation::Point{0.5f, 1.0f});
+
+    auto addStop = [&](double offset, uint8_t a) {
+        media::GradientStop stop;
+        stop.Offset(offset);
+        stop.Color(winrt::Windows::UI::Color{a, 255, 255, 255});
+        rim.GradientStops().Append(stop);
+    };
+    addStop(0.00, 71); // ~28% top edge
+    addStop(0.18, 30); // ~12% shoulder
+    addStop(0.55, 26); // ~10% sides
+    addStop(0.88, 33); // ~13% lower curve
+    addStop(1.00, 51); // ~20% bottom bounce
+    return rim;
+}
+
 static media::Brush MakeTaskbarPillBorder(int style) {
     if (style == STYLE_ICON_REFLECT) {
         return media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
     }
     if (style == STYLE_FLAT_FROSTED) {
-        return MakePuwBorder();
+        return MakeHairlineCatchRim();
     }
     return MakeGlassSlabRim();
 }
@@ -485,7 +505,8 @@ static xaml::Thickness TaskbarPillBorderThickness(int style) {
     if (style == STYLE_ICON_REFLECT) {
         return xaml::Thickness{0.0, 0.0, 0.0, 0.0};
     }
-    return xaml::Thickness{1.0, 1.0, 1.0, 1.0};
+    double t = (style == STYLE_FLAT_FROSTED) ? 0.65 : 1.0;
+    return xaml::Thickness{t, t, t, t};
 }
 
 static float TaskbarPillShadowZ(int style) {

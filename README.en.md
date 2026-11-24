@@ -55,7 +55,7 @@ Pick one from the tray menu under **Taskbar style**.
 
 ![Borderless icon reflection style](assets/screenshots/style-borderless.png)
 
-**Flat Frosted**: the v1.0.6 glass look, with an even thin white rim, no drop shadow, and no sheen.
+**Flat Frosted**: the v1.0.7 glass look, with a thin 0.65px catch-light rim, no drop shadow, and no sheen.
 
 ![Flat Frosted style](assets/screenshots/style-flat-frosted.png)
 
