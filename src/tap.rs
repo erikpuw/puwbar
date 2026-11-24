@@ -51,6 +51,7 @@ const CMD_SURF_THUMBNAIL: u32 = 1016;
 const CMD_STYLE_FROSTED: u32 = 1020;
 const CMD_STYLE_CRYSTAL_CLEAR: u32 = 1021;
 const CMD_STYLE_ICON_REFLECT: u32 = 1022;
+const CMD_STYLE_FLAT_FROSTED: u32 = 1023;
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "PuwBar";
 const APP_KEY: &str = "Software\\PuwBar";
@@ -158,6 +159,7 @@ enum TaskbarStyle {
     FrostedGlass = 0,
     CrystalClear = 1,
     IconReflect = 2,
+    FlatFrosted = 3,
 }
 
 impl TaskbarStyle {
@@ -165,6 +167,7 @@ impl TaskbarStyle {
         match v {
             1 => Self::CrystalClear,
             2 => Self::IconReflect,
+            3 => Self::FlatFrosted,
             _ => Self::FrostedGlass,
         }
     }
@@ -767,6 +770,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         lbl_style_frosted,
         lbl_style_clear,
         lbl_style_reflect,
+        lbl_style_flat,
         lbl_tint,
         lbl_light,
         lbl_balanced,
@@ -786,6 +790,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             "Kính mờ (Mặc định)",
             "Kính trong suốt",
             "Không viền (Phản chiếu icon)",
+            "Kính mờ phẳng",
             "Độ tối lớp kính",
             "Trong nhẹ (24%)",
             "Cân bằng (45%)",
@@ -805,6 +810,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             "Frosted Glass (Default)",
             "Crystal Clear",
             "Borderless (Icon Reflection)",
+            "Flat Frosted",
             "Glass contrast",
             "Light (24%)",
             "Balanced (45%)",
@@ -831,6 +837,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             (TaskbarStyle::FrostedGlass, CMD_STYLE_FROSTED, lbl_style_frosted),
             (TaskbarStyle::CrystalClear, CMD_STYLE_CRYSTAL_CLEAR, lbl_style_clear),
             (TaskbarStyle::IconReflect, CMD_STYLE_ICON_REFLECT, lbl_style_reflect),
+            (TaskbarStyle::FlatFrosted, CMD_STYLE_FLAT_FROSTED, lbl_style_flat),
         ] {
             AppendMenuW(
                 style_menu,
@@ -935,10 +942,11 @@ unsafe fn show_tray_menu(hwnd: HWND) {
 
     match choice {
         CMD_AUTOSTART => set_autostart(!autostart),
-        CMD_STYLE_FROSTED | CMD_STYLE_CRYSTAL_CLEAR | CMD_STYLE_ICON_REFLECT => {
+        CMD_STYLE_FROSTED | CMD_STYLE_CRYSTAL_CLEAR | CMD_STYLE_ICON_REFLECT | CMD_STYLE_FLAT_FROSTED => {
             let next = match choice {
                 CMD_STYLE_CRYSTAL_CLEAR => TaskbarStyle::CrystalClear,
                 CMD_STYLE_ICON_REFLECT => TaskbarStyle::IconReflect,
+                CMD_STYLE_FLAT_FROSTED => TaskbarStyle::FlatFrosted,
                 _ => TaskbarStyle::FrostedGlass,
             };
             save_taskbar_style(next);
@@ -1202,6 +1210,7 @@ mod tests {
         assert_eq!(TaskbarStyle::from_u32(0), TaskbarStyle::FrostedGlass);
         assert_eq!(TaskbarStyle::from_u32(1), TaskbarStyle::CrystalClear);
         assert_eq!(TaskbarStyle::from_u32(2), TaskbarStyle::IconReflect);
+        assert_eq!(TaskbarStyle::from_u32(3), TaskbarStyle::FlatFrosted);
         assert_eq!(TaskbarStyle::from_u32(99), TaskbarStyle::FrostedGlass);
         assert_eq!(
             format_glass_cfg(GlassContrast::Light, SURF_ALL, TaskbarStyle::FrostedGlass),

@@ -62,6 +62,7 @@ static constexpr uint32_t SURF_ALL            = 0x7Fu;
 static constexpr int STYLE_FROSTED_GLASS = 0; // Default v1.0.7 frosted glass
 static constexpr int STYLE_CRYSTAL_CLEAR = 1; // Transparent glass with glossy reflection
 static constexpr int STYLE_ICON_REFLECT  = 2; // Completely borderless/transparent + real icon reflection
+static constexpr int STYLE_FLAT_FROSTED  = 3; // v1.0.6 look: popup glass, flat 15% hairline, no shadow
 
 struct GlassConfig {
     int level = 2; // 0 = Light (24%), 1 = Balanced (45%), 2 = High contrast (62%)
@@ -107,7 +108,8 @@ static GlassConfig ReadGlassConfig() {
         cfg.surfaces = static_cast<uint32_t>(mask) & SURF_ALL;
         if (endPtr && *endPtr == ':' && endPtr[1] != '\0') {
             int parsedStyle = static_cast<int>(strtol(endPtr + 1, nullptr, 10));
-            if (parsedStyle == STYLE_CRYSTAL_CLEAR || parsedStyle == STYLE_ICON_REFLECT) {
+            if (parsedStyle == STYLE_CRYSTAL_CLEAR || parsedStyle == STYLE_ICON_REFLECT
+                || parsedStyle == STYLE_FLAT_FROSTED) {
                 cfg.style = parsedStyle;
             } else {
                 cfg.style = STYLE_FROSTED_GLASS;
@@ -461,6 +463,9 @@ static media::Brush MakeTaskbarPillBackground(xaml::DependencyObject const& obj,
     if (style == STYLE_CRYSTAL_CLEAR) {
         return MakeCrystalClearBackground();
     }
+    if (style == STYLE_FLAT_FROSTED) {
+        return MakePuwGlass(obj);
+    }
     // Frosted pill: light blur so background shapes stay readable through the ~48px pill, plus
     // a surface sheen so it reads as a lit glass slab. Popups keep the default MakePuwGlass.
     return MakePuwGlass(obj, 8.0f, true);
@@ -469,6 +474,9 @@ static media::Brush MakeTaskbarPillBackground(xaml::DependencyObject const& obj,
 static media::Brush MakeTaskbarPillBorder(int style) {
     if (style == STYLE_ICON_REFLECT) {
         return media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
+    }
+    if (style == STYLE_FLAT_FROSTED) {
+        return MakePuwBorder();
     }
     return MakeGlassSlabRim();
 }
@@ -483,7 +491,7 @@ static xaml::Thickness TaskbarPillBorderThickness(int style) {
 static float TaskbarPillShadowZ(int style) {
     // Keep elevation low: ThemeShadow blur scales with Z and gets clipped by the taskbar
     // XAML island bounds, leaving a hard horizontal cut line at the taskbar edge.
-    if (style == STYLE_ICON_REFLECT) return 0.0f;
+    if (style == STYLE_ICON_REFLECT || style == STYLE_FLAT_FROSTED) return 0.0f;
     return (style == STYLE_CRYSTAL_CLEAR) ? 4.0f : 3.0f;
 }
 
