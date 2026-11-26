@@ -2,8 +2,8 @@
 1 24 "puwbar-setup.manifest"
 
 1 VERSIONINFO
-FILEVERSION     1,0,8,0
-PRODUCTVERSION  1,0,8,0
+FILEVERSION     1,0,9,0
+PRODUCTVERSION  1,0,9,0
 FILEOS          0x40004
 FILETYPE        0x1
 BEGIN
@@ -13,12 +13,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "erikpuw"
             VALUE "FileDescription",  "PuwBar Setup - Floating Frosted Glass Taskbar Installer"
-            VALUE "FileVersion",      "1.0.8.0"
+            VALUE "FileVersion",      "1.0.9.0"
             VALUE "InternalName",     "puwbar-setup.exe"
             VALUE "LegalCopyright",   "Copyright (c) 2026 erikpuw (MIT)"
             VALUE "OriginalFilename", "puwbar-setup.exe"
             VALUE "ProductName",      "PuwBar Setup"
-            VALUE "ProductVersion",   "1.0.8"
+            VALUE "ProductVersion",   "1.0.9"
         END
     END
     BLOCK "VarFileInfo"

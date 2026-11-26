@@ -360,19 +360,12 @@ static winrt::Windows::UI::Color FallbackGlassColor() {
     return winrt::Windows::UI::Color{110, 16, 20, 30};
 }
 
-// Blur per kind of surface, tuned by eye against each other (the same value reads stronger in some hosts):
-// the taskbar pills and the small flyouts (Quick Settings, Notifications, Calendar, Jump Lists, the tray
-// overflow popup, tooltips) stay light so the wallpaper still shows through, while the large Start menu
-// is blurred harder or its surface reads as noisy behind the text. Every surface shares the same
-// auto-contrast layer on top of its blur.
-static constexpr float kPillBlur = 5.0f;
-static constexpr float kFlyoutBlur = 6.0f;
-static constexpr float kStartBlur = 12.0f;
-
-static bool IsStartMenuHost() {
-    static bool const isStart = GetModuleHandleW(L"StartMenuExperienceHost.exe") != nullptr;
-    return isStart;
-}
+// Blur per kind of surface, tuned by eye: the taskbar pills stay light so the wallpaper still shows through
+// the thin bar, while every popup (Start, Quick Settings, Notifications, Calendar, Jump Lists, the tray
+// overflow popup, tooltips) shares one stronger blur, or its large surface reads as noisy behind the text.
+// Every surface shares the same auto-contrast layer on top of its blur.
+static constexpr float kPillBlur = 6.0f;
+static constexpr float kPopupBlur = 12.0f;
 
 // What sits on top of the blurred, auto-contrast backdrop:
 //   Plain: nothing (popups, so they match the pills' see-through feel),
@@ -424,8 +417,7 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
     // Graph: blur -> [auto contrast darkening] -> [sheen | smoke veil]. Effect node names must be
     // unique, so the luma branch has its own blur node (both read the same "Backdrop" source).
     comp::CompositionEffectBrush BuildBrush(bool adaptive) const {
-        float const blurAmount = (m_look != GlassLook::Plain) ? kPillBlur
-            : (IsStartMenuHost() ? kStartBlur : kFlyoutBlur);
+        float const blurAmount = (m_look != GlassLook::Plain) ? kPillBlur : kPopupBlur;
         auto blur = winrt::make_self<GaussianBlurEffect>();
         blur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
         blur->m_blur = blurAmount;
@@ -435,9 +427,9 @@ struct PuwGlassBrush : media::XamlCompositionBrushBaseT<PuwGlassBrush> {
             lumaBlur->m_name = L"LumaBlur";
             lumaBlur->m_source = comp::CompositionEffectSourceParameter(L"Backdrop");
             lumaBlur->m_blur = blurAmount;
-            // Only blown-out areas are darkened: 0 below ~60% luma, ~22% black at 75%, ~60% at pure white.
-            // Everything below the threshold keeps its full contrast so the wallpaper stays visible.
-            auto luma = winrt::make_self<LumaDarkenEffect>(1.5f, 0.6f);
+            // Only the bright half is darkened: 0 below ~50% luma, ~14% black at 60%, ~35% at 75%, ~70% at pure
+            // white. Everything below the threshold keeps its full contrast so the wallpaper stays visible.
+            auto luma = winrt::make_self<LumaDarkenEffect>(1.4f, 0.5f);
             luma->m_source = lumaBlur.as<ge::IGraphicsEffectSource>();
             auto adapt = winrt::make_self<CompositeEffect>();
             adapt->m_name = L"Adaptive";
@@ -498,15 +490,28 @@ static media::Brush MakePuwGlass(xaml::DependencyObject const& obj, GlassLook lo
     return media::SolidColorBrush(FallbackGlassColor());
 }
 
-// Average brightness (0..1) of the strip of the primary screen just above the taskbar, where the taskbar
-// context menus open, from a tiny downscale of the composed desktop. Native acrylic cannot take the glass's
-// per-pixel auto-contrast layer, so the context menus use this single measured value for the same purpose.
+// Average brightness (0..1) of the part of the screen the context menu opens over, from a tiny downscale of
+// the composed desktop. The menu opens above the mouse pointer (it was right-clicked there), so the area is
+// a ~500px wide, ~620px tall block just above the pointer; without a pointer it falls back to the strip above
+// the taskbar. Native acrylic cannot take the glass's per-pixel auto-contrast layer, so the context menus use
+// this single measured value for the same purpose.
 static float SampleMenuBackdropLuma() {
     constexpr int kW = 24;
     constexpr int kH = 8;
     float luma = 0.5f;
     int const sw = GetSystemMetrics(SM_CXSCREEN);
     int const sh = GetSystemMetrics(SM_CYSCREEN);
+    int x0 = 0;
+    int x1 = sw;
+    int y0 = sh * 55 / 100;
+    int y1 = sh * 95 / 100;
+    POINT pt{};
+    if (GetCursorPos(&pt)) {
+        x0 = std::clamp<int>(pt.x - 250, 0, sw - 1);
+        x1 = std::clamp<int>(pt.x + 250, x0 + 1, sw);
+        y0 = std::clamp<int>(pt.y - 640, 0, sh - 1);
+        y1 = std::clamp<int>(pt.y - 20, y0 + 1, sh);
+    }
     HDC screen = GetDC(nullptr);
     if (!screen) return luma;
     HDC mem = CreateCompatibleDC(screen);
@@ -523,9 +528,7 @@ static float SampleMenuBackdropLuma() {
         HGDIOBJ old = SelectObject(mem, bmp);
         SetStretchBltMode(mem, HALFTONE);
         SetBrushOrgEx(mem, 0, 0, nullptr);
-        int const y0 = sh * 55 / 100;
-        int const y1 = sh * 95 / 100;
-        if (StretchBlt(mem, 0, 0, kW, kH, screen, 0, y0, sw, y1 - y0, SRCCOPY)) {
+        if (StretchBlt(mem, 0, 0, kW, kH, screen, x0, y0, x1 - x0, y1 - y0, SRCCOPY)) {
             auto const* px = static_cast<uint32_t const*>(bits);
             double sum = 0.0;
             for (int i = 0; i < kW * kH; ++i) {
@@ -969,8 +972,10 @@ private:
             // veil that stays light on dark wallpapers and gets denser as the wallpaper gets brighter. A neutral
             // tint and a low luminosity opacity keep it from turning the wallpaper's hue into a dark brown/blue.
             float const luma = SampleMenuBackdropLuma();
-            float const over = luma > 0.55f ? luma - 0.55f : 0.0f;
-            double const veil = std::clamp(0.12 + 1.5 * over, 0.12, 0.70);
+            // Same threshold and slope as the glass's luma layer (LumaDarkenEffect in BuildBrush), on top of a
+            // light base veil.
+            float const over = luma > 0.5f ? luma - 0.5f : 0.0f;
+            double const veil = std::clamp(0.12 + 1.4 * over, 0.12, 0.70);
             ac.TintColor(winrt::Windows::UI::Color{255, 12, 14, 18});
             ac.TintOpacity(veil);
             ac.TintLuminosityOpacity(0.10);
