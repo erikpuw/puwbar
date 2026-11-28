@@ -954,6 +954,8 @@ private:
             || name == L"AcrylicBorder"
             || name == L"RunningIndicator"
             || name == L"IconPanel"
+            || name == L"LeftOverflowButtonDivider"
+            || name == L"RightOverflowButtonDivider"
             || (name == L"ExperienceToggleButtonRootPanel"
                 && parentType == L"Taskbar.AugmentedEntryPointButton");
     }
@@ -1721,6 +1723,28 @@ private:
             return;
         }
 
+        // The two hairlines around the overflow ("...") button: inside a floating pill they only read as stray marks.
+        if (name == L"LeftOverflowButtonDivider" || name == L"RightOverflowButtonDivider") {
+            SaveAndSet(obj, xaml::UIElement::VisibilityProperty(), winrt::box_value(xaml::Visibility::Collapsed));
+            try {
+                auto token = obj.RegisterPropertyChangedCallback(
+                    xaml::UIElement::VisibilityProperty(),
+                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
+                        try {
+                            auto cur = winrt::unbox_value_or<xaml::Visibility>(sender.GetValue(dp), xaml::Visibility::Collapsed);
+                            if (cur != xaml::Visibility::Collapsed) {
+                                sender.SetValue(dp, winrt::box_value(xaml::Visibility::Collapsed));
+                            }
+                        } catch (...) {
+                        }
+                    });
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_propCallbacks.push_back({winrt::make_weak(obj), xaml::UIElement::VisibilityProperty(), token});
+            } catch (...) {
+            }
+            return;
+        }
+
         if (name == L"IconPanel") {
             ApplyLayoutProps(obj, type, name, parentType, true);
             return;
@@ -2098,6 +2122,31 @@ private:
                     fe.ActualWidth(), fe.ActualHeight(), x, y, m.Left, m.Top, m.Right, m.Bottom,
                     static_cast<int>(fe.HorizontalAlignment()), static_cast<int>(fe.VerticalAlignment()), static_cast<int>(fe.Visibility()));
                 line += buf;
+                // What can move an element without changing its layout slot: an explicit width, a translation or a
+                // render transform (the vertical taskbar's icon panels sit 0 or 4px off depending on hover history).
+                char extra[200];
+                float tx = 0.0f, ty = 0.0f;
+                std::string rt = "none";
+                if (auto el = node.try_as<xaml::UIElement>()) {
+                    try {
+                        auto tr = el.Translation();
+                        tx = tr.x;
+                        ty = tr.y;
+                    } catch (...) {
+                    }
+                    try {
+                        if (auto t = el.RenderTransform()) {
+                            rt = Utf8(std::wstring(winrt::get_class_name(t)));
+                            if (auto tt = t.try_as<media::TranslateTransform>()) {
+                                rt += "(" + std::to_string(tt.X()) + "," + std::to_string(tt.Y()) + ")";
+                            }
+                        }
+                    } catch (...) {
+                    }
+                }
+                snprintf(extra, sizeof(extra), " width=%.1f translation=(%.1f,%.1f) rendertransform=", fe.Width(), tx, ty);
+                line += extra;
+                line += rt;
             }
             out += line;
             out += "\n";
