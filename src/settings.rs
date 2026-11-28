@@ -717,12 +717,12 @@ unsafe fn page_look(p: &mut Pen, style: u32) {
         let on = style == i as u32;
         p.fill(r, 12.0, if on { ACCENT_SOFT } else if p.hot(act) { CARD_HOT } else { CARD });
         p.stroke(r, 12.0, if on { ACCENT } else { LINE }, if on { 1.5 } else { 1.0 });
-        let thumb = (r.0 + 12.0, r.1 + 12.0, 64.0, 76.0);
+        let thumb = (r.0 + 12.0, r.1 + 12.0, 64.0, ch - 24.0);
         p.gradient(thumb, 8.0, 0xFF4A7BD6, 0xFF8A5BD0);
         pill_art(p, (thumb.0 + 5.0, thumb.1 + thumb.3 - 24.0, 54.0, 16.0), i, 3);
         let (name, desc) = if p.en { (en, den) } else { (vi, dvi) };
-        p.text((r.0 + 84.0, r.1 + 12.0, cw - 92.0, 20.0), name, 13.0, true, TEXT, 0);
-        p.text((r.0 + 84.0, r.1 + 36.0, cw - 92.0, 60.0), desc, 11.0, false, MUTED, 3);
+        p.text((r.0 + 84.0, r.1 + 28.0, cw - 92.0, 20.0), name, 13.0, true, TEXT, 0);
+        p.text((r.0 + 84.0, r.1 + 52.0, cw - 92.0, 40.0), desc, 11.0, false, MUTED, 3);
         p.hit(r, act);
     }
 }
