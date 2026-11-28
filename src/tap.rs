@@ -881,12 +881,44 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     }
 }
 
+const POSITION_TIMER: usize = 10;
+/// How long after the taskbar changed edge its window is refreshed, so Explorer has finished moving it.
+const REFRESH_DELAY: Duration = Duration::from_millis(2500);
+
 thread_local! {
+    static TRAY_RECT: std::cell::Cell<(i32, i32, i32, i32)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
+    static REFRESH_AT: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
     static TASKBAR_CREATED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     static DLL_PATH: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
     static READY_HANDLE: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
     static RELOAD_HANDLE: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
     static TRAY_ICON_HANDLE: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+}
+
+/// A white square appears at the start corner of the taskbar after it changes edge, and stays until the window is
+/// recomposed. When the taskbar window moves, hide and show it once after Explorer has settled.
+unsafe fn refresh_taskbar_after_move() {
+    let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
+    if tray.is_null() {
+        return;
+    }
+    let mut rc: RECT = std::mem::zeroed();
+    GetWindowRect(tray, &mut rc);
+    let now = (rc.left, rc.top, rc.right, rc.bottom);
+    let before = TRAY_RECT.with(|c| c.replace(now));
+    if before != (0, 0, 0, 0) && before != now {
+        REFRESH_AT.with(|c| c.set(Some(std::time::Instant::now() + REFRESH_DELAY)));
+        return;
+    }
+    let due = REFRESH_AT.with(|c| c.get()).is_some_and(|t| std::time::Instant::now() >= t);
+    if due {
+        REFRESH_AT.with(|c| c.set(None));
+        for_each_taskbar(|hwnd| {
+            ShowWindow(hwnd, SW_HIDE);
+        });
+        std::thread::sleep(Duration::from_millis(60));
+        show_hidden_taskbars();
+    }
 }
 
 unsafe extern "system" fn host_wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -906,6 +938,10 @@ unsafe extern "system" fn host_wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         }
         WM_TIMER if w == 9 => {
             PostQuitMessage(0);
+            return 0;
+        }
+        WM_TIMER if w == POSITION_TIMER => {
+            refresh_taskbar_after_move();
             return 0;
         }
         WM_CLOSE | WM_ENDSESSION => {
@@ -1038,6 +1074,7 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
         if let Some(secs) = seconds {
             SetTimer(hwnd, 9, secs.clamp(1, 3600) * 1000, None);
         }
+        SetTimer(hwnd, POSITION_TIMER, 400, None);
 
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
