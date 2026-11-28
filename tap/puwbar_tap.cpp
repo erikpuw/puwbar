@@ -1054,7 +1054,13 @@ private:
                     winrt::box_value(startAligned ? xaml::VerticalAlignment::Top : xaml::VerticalAlignment::Center));
                 setProp(
                     xaml::FrameworkElement::MarginProperty(),
-                    winrt::box_value(xaml::Thickness{0.0, 4.0, 0.0, 4.0 + TrayReservedHeight()}));
+                    winrt::box_value(xaml::Thickness{0.0, 4.0, 0.0, 4.0}));
+                // Windows already leaves room for the tray when it decides which apps fit, but a centred frame is
+                // arranged in the whole window and so overlaps the tray. Lift it by half the tray height with a render
+                // transform (a margin would be counted a second time and push apps into the overflow flyout).
+                media::TranslateTransform lift;
+                lift.Y(startAligned ? 0.0 : -TrayReservedHeight() / 2.0);
+                setProp(xaml::UIElement::RenderTransformProperty(), lift);
             } else {
                 // Horizontal taskbar: keep Windows' native Height (~48px), only auto-size Width.
                 setProp(xaml::FrameworkElement::WidthProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
@@ -1062,6 +1068,8 @@ private:
                     xaml::FrameworkElement::HorizontalAlignmentProperty(),
                     winrt::box_value(startAligned ? xaml::HorizontalAlignment::Left : xaml::HorizontalAlignment::Center));
                 setProp(xaml::FrameworkElement::VerticalAlignmentProperty(), winrt::box_value(xaml::VerticalAlignment::Stretch));
+                media::TranslateTransform noLift;
+                setProp(xaml::UIElement::RenderTransformProperty(), noLift);
                 setProp(controls::Control::PaddingProperty(), winrt::box_value(xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
                 setProp(
                     xaml::FrameworkElement::MarginProperty(),
