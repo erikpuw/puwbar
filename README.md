@@ -27,7 +27,7 @@
 | **Trượt ngang mượt** | Nhịp trượt 300ms khớp với animation mở/đóng ứng dụng của Windows 11, khóa VSync theo tần số quét màn hình. |
 | **Nhẹ & gọn** | Chạy nền khoảng 1,2 MB RAM và 0% CPU. Cài đặt cố định và gỡ sạch qua Windows Installed apps, thoát ra là trả taskbar về nguyên bản. |
 | **Bảng cài đặt** | Bấm chuột trái vào icon PuwBar ở khay để mở. Đổi kiểu giao diện, bật tắt từng khu vực kính, khởi động cùng Windows và ngôn ngữ ngay trong một cửa sổ. |
-| **Menu tray** | Khởi động cùng Windows, Kiểu giao diện (Kính mờ / Kính trong suốt / Không viền phản chiếu icon / Kính mờ phẳng / Trong suốt hoàn toàn), Khu vực áp kính (bật/tắt riêng từng bảng về gốc Windows), Áp dụng lại giao diện, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát (`Ctrl+Alt+F12`). |
+| **Menu tray** | Chuột phải vào icon: Cài đặt, Giới thiệu, Thoát (`Ctrl+Alt+F12`). Mọi tùy chọn khác nằm trong bảng cài đặt. |
 
 **Khởi động cùng Windows** hỏi quyền quản trị một lần khi bật để tạo tác vụ Task Scheduler chạy ngay lúc đăng nhập (không trễ, tự chờ Explorer XAML sẵn sàng trong 30 giây). Nếu từ chối UAC, chương trình tự chuyển sang khóa `HKCU\...\Run`. Bỏ tick thì tắt.
 
@@ -42,7 +42,7 @@
 
 ### Kiểu taskbar
 
-Chọn trong bảng cài đặt (bấm chuột trái vào icon ở khay) hoặc trong menu tray, mục **Kiểu giao diện**.
+Chọn trong bảng cài đặt (bấm chuột trái vào icon ở khay).
 
 **Kính mờ** (mặc định): nền nhòe nhẹ, vẫn thấy hình khối phía sau, mặt kính có ánh bóng.
 

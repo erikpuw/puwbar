@@ -32,24 +32,8 @@ const CLSID_PUWBAR_TAP: GUID = GUID {
 const EXIT_HOTKEY: i32 = 1;
 const TRAY_CALLBACK: u32 = WM_APP + 10;
 const TRAY_UID: u32 = 1;
-const CMD_AUTOSTART: u32 = 1001;
-const CMD_REAPPLY: u32 = 1002;
-const CMD_LANG_VI: u32 = 1003;
-const CMD_LANG_EN: u32 = 1004;
 const CMD_ABOUT: u32 = 1005;
 const CMD_EXIT: u32 = 1006;
-const CMD_SURF_START_MENU: u32 = 1010;
-const CMD_SURF_CONTROL_CENTER: u32 = 1011;
-const CMD_SURF_NOTIFICATIONS: u32 = 1012;
-const CMD_SURF_CALENDAR: u32 = 1013;
-const CMD_SURF_JUMP_LIST: u32 = 1014;
-const CMD_SURF_TOOLTIP: u32 = 1015;
-const CMD_SURF_THUMBNAIL: u32 = 1016;
-const CMD_STYLE_FROSTED: u32 = 1020;
-const CMD_STYLE_CRYSTAL_CLEAR: u32 = 1021;
-const CMD_STYLE_ICON_REFLECT: u32 = 1022;
-const CMD_STYLE_FLAT_FROSTED: u32 = 1023;
-const CMD_STYLE_CLEAR: u32 = 1024;
 const CMD_SETTINGS: u32 = 1007;
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "PuwBar";
@@ -865,155 +849,12 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         return;
     }
     let lang = read_lang();
-    let autostart = is_autostart_enabled();
-    let style = read_taskbar_style();
-    let surfaces = read_surfaces_mask();
-    let (
-        lbl_auto,
-        lbl_style,
-        lbl_style_frosted,
-        lbl_style_clear,
-        lbl_style_reflect,
-        lbl_style_flat,
-        lbl_surfaces,
-        lbl_notif,
-        lbl_cal,
-        lbl_thumb,
-        lbl_reapply,
-        lbl_lang,
-        lbl_about,
-        lbl_exit,
-    ) = match lang {
-        Lang::Vi => (
-            "Khởi động cùng Windows",
-            "Kiểu giao diện",
-            "Kính mờ (Mặc định)",
-            "Kính trong suốt",
-            "Không viền (Phản chiếu icon)",
-            "Kính mờ phẳng",
-            "Khu vực áp kính",
-            "Thông báo",
-            "Lịch",
-            "Xem trước cửa sổ",
-            "Áp dụng lại giao diện",
-            "Ngôn ngữ",
-            "Giới thiệu PuwBar",
-            "Thoát PuwBar\tCtrl+Alt+F12",
-        ),
-        Lang::En => (
-            "Start with Windows",
-            "Taskbar style",
-            "Frosted Glass (Default)",
-            "Crystal Clear",
-            "Borderless (Icon Reflection)",
-            "Flat Frosted",
-            "Glass surfaces",
-            "Notifications",
-            "Calendar",
-            "Window previews",
-            "Reapply taskbar glass",
-            "Language",
-            "About PuwBar",
-            "Exit PuwBar\tCtrl+Alt+F12",
-        ),
+    let (lbl_settings, lbl_about, lbl_exit) = match lang {
+        Lang::Vi => ("Cài đặt PuwBar...", "Giới thiệu PuwBar", "Thoát PuwBar	Ctrl+Alt+F12"),
+        Lang::En => ("PuwBar settings...", "About PuwBar", "Exit PuwBar	Ctrl+Alt+F12"),
     };
-    AppendMenuW(
-        menu,
-        MF_STRING,
-        CMD_SETTINGS as usize,
-        wide(match lang {
-            Lang::Vi => "Cài đặt PuwBar...",
-            Lang::En => "PuwBar settings...",
-        })
-        .as_ptr(),
-    );
-    AppendMenuW(menu, MF_SEPARATOR, 0, null());
-    AppendMenuW(
-        menu,
-        MF_STRING | if autostart { MF_CHECKED } else { MF_UNCHECKED },
-        CMD_AUTOSTART as usize,
-        wide(lbl_auto).as_ptr(),
-    );
-    let style_menu = CreatePopupMenu();
-    if !style_menu.is_null() {
-        let lbl_style_none = match lang {
-            Lang::Vi => "Trong suốt hoàn toàn",
-            Lang::En => "Fully transparent",
-        };
-        for (st, cmd, label) in [
-            (TaskbarStyle::FrostedGlass, CMD_STYLE_FROSTED, lbl_style_frosted),
-            (TaskbarStyle::CrystalClear, CMD_STYLE_CRYSTAL_CLEAR, lbl_style_clear),
-            (TaskbarStyle::IconReflect, CMD_STYLE_ICON_REFLECT, lbl_style_reflect),
-            (TaskbarStyle::FlatFrosted, CMD_STYLE_FLAT_FROSTED, lbl_style_flat),
-            (TaskbarStyle::Clear, CMD_STYLE_CLEAR, lbl_style_none),
-        ] {
-            AppendMenuW(
-                style_menu,
-                MF_STRING | if style == st { MF_CHECKED } else { MF_UNCHECKED },
-                cmd as usize,
-                wide(label).as_ptr(),
-            );
-        }
-        AppendMenuW(menu, MF_POPUP, style_menu as usize, wide(lbl_style).as_ptr());
-    }
-    let surf_menu = CreatePopupMenu();
-    if !surf_menu.is_null() {
-        for (bit, cmd, label) in [
-            (SURF_START_MENU, CMD_SURF_START_MENU, "Start Menu"),
-            (SURF_CONTROL_CENTER, CMD_SURF_CONTROL_CENTER, "Control Center"),
-            (SURF_NOTIFICATIONS, CMD_SURF_NOTIFICATIONS, lbl_notif),
-            (SURF_CALENDAR, CMD_SURF_CALENDAR, lbl_cal),
-            (SURF_JUMP_LIST, CMD_SURF_JUMP_LIST, "Jump List"),
-            (SURF_TOOLTIP, CMD_SURF_TOOLTIP, "Tooltip"),
-            (SURF_THUMBNAIL, CMD_SURF_THUMBNAIL, lbl_thumb),
-        ] {
-            AppendMenuW(
-                surf_menu,
-                MF_STRING | if (surfaces & bit) != 0 { MF_CHECKED } else { MF_UNCHECKED },
-                cmd as usize,
-                wide(label).as_ptr(),
-            );
-        }
-        AppendMenuW(menu, MF_POPUP, surf_menu as usize, wide(lbl_surfaces).as_ptr());
-    }
-    AppendMenuW(
-        menu,
-        MF_STRING,
-        CMD_REAPPLY as usize,
-        wide(lbl_reapply).as_ptr(),
-    );
-    let lang_menu = CreatePopupMenu();
-    if !lang_menu.is_null() {
-        AppendMenuW(
-            lang_menu,
-            MF_STRING
-                | if lang == Lang::Vi {
-                    MF_CHECKED
-                } else {
-                    MF_UNCHECKED
-                },
-            CMD_LANG_VI as usize,
-            wide("Tiếng Việt").as_ptr(),
-        );
-        AppendMenuW(
-            lang_menu,
-            MF_STRING
-                | if lang == Lang::En {
-                    MF_CHECKED
-                } else {
-                    MF_UNCHECKED
-                },
-            CMD_LANG_EN as usize,
-            wide("English").as_ptr(),
-        );
-        AppendMenuW(menu, MF_POPUP, lang_menu as usize, wide(lbl_lang).as_ptr());
-    }
-    AppendMenuW(
-        menu,
-        MF_STRING,
-        CMD_ABOUT as usize,
-        wide(lbl_about).as_ptr(),
-    );
+    AppendMenuW(menu, MF_STRING, CMD_SETTINGS as usize, wide(lbl_settings).as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_ABOUT as usize, wide(lbl_about).as_ptr());
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
     AppendMenuW(menu, MF_STRING, CMD_EXIT as usize, wide(lbl_exit).as_ptr());
 
@@ -1034,12 +875,6 @@ unsafe fn show_tray_menu(hwnd: HWND) {
 
     match choice {
         CMD_SETTINGS => crate::settings::open(hwnd),
-        CMD_AUTOSTART => set_autostart(!autostart),
-        CMD_STYLE_FROSTED..=CMD_STYLE_CLEAR => apply_style(choice - CMD_STYLE_FROSTED),
-        CMD_SURF_START_MENU..=CMD_SURF_THUMBNAIL => toggle_surface(1u32 << (choice - CMD_SURF_START_MENU)),
-        CMD_REAPPLY => reapply(),
-        CMD_LANG_VI => apply_language(hwnd, false),
-        CMD_LANG_EN => apply_language(hwnd, true),
         CMD_ABOUT => show_about_dialog(hwnd, lang),
         CMD_EXIT => PostQuitMessage(0),
         _ => {}
