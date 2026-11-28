@@ -688,16 +688,26 @@ static TaskbarEdge GetTaskbarEdge() {
     return (h > w) ? TaskbarEdge::Left : TaskbarEdge::Bottom;
 }
 
-// Windows makes the Start button (LaunchListButton) ~5px larger along the taskbar when the taskbar is
-// start-aligned. Horizontal: trim the left overhang so both pill ends match. Vertical: trim half of the
-// extra height above and below, otherwise the first app icon sits a visible gap away from Start.
+// Windows makes the Start button (LaunchListButton) wider than the other buttons when a horizontal taskbar is
+// start-aligned: trim the left overhang so both pill ends match. A vertical taskbar needs no margin: the button is
+// only 1px taller there, and a negative margin makes it taller still (measured 55px instead of 45px).
 static xaml::Thickness LaunchButtonMargin() {
     TaskbarEdge edge = GetTaskbarEdge();
-    bool startAligned = IsTaskbarAlignedStart();
     if (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right) {
-        return startAligned ? xaml::Thickness{0.0, -2.5, 0.0, -2.5} : xaml::Thickness{0.0, 0.0, 0.0, 0.0};
+        return xaml::Thickness{0.0, 0.0, 0.0, 0.0};
     }
-    return xaml::Thickness{startAligned ? -7.0 : 0.0, 0.0, 0.0, 0.0};
+    return xaml::Thickness{IsTaskbarAlignedStart() ? -7.0 : 0.0, 0.0, 0.0, 0.0};
+}
+
+// Height of the system tray block (TrayNotifyWnd) in XAML pixels. On a vertical taskbar it sits at the bottom, and the
+// app group must stay clear of it: the group is centred in the whole window otherwise and overlaps the tray.
+static double TrayReservedHeight() {
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND notify = tray ? FindWindowExW(tray, nullptr, L"TrayNotifyWnd", nullptr) : nullptr;
+    RECT rc{};
+    if (!notify || !GetWindowRect(notify, &rc)) return 0.0;
+    double scale = static_cast<double>(GetDpiForWindow(tray)) / 96.0;
+    return scale > 0.0 ? static_cast<double>(rc.bottom - rc.top) / scale : 0.0;
 }
 
 // Smooth GPU implicit animation for horizontal position (Offset only — no Size lag so no empty ghost slot appears).
@@ -943,6 +953,7 @@ private:
             || name == L"JumpListAcrylic"
             || name == L"AcrylicBorder"
             || name == L"RunningIndicator"
+            || (name == L"IconPanel" && parentType == L"Taskbar.TaskListButton")
             || (name == L"ExperienceToggleButtonRootPanel"
                 && parentType == L"Taskbar.AugmentedEntryPointButton");
     }
@@ -1043,7 +1054,7 @@ private:
                     winrt::box_value(startAligned ? xaml::VerticalAlignment::Top : xaml::VerticalAlignment::Center));
                 setProp(
                     xaml::FrameworkElement::MarginProperty(),
-                    winrt::box_value(xaml::Thickness{0.0, 4.0, 0.0, 4.0}));
+                    winrt::box_value(xaml::Thickness{0.0, 4.0, 0.0, 4.0 + TrayReservedHeight()}));
             } else {
                 // Horizontal taskbar: keep Windows' native Height (~48px), only auto-size Width.
                 setProp(xaml::FrameworkElement::WidthProperty(), winrt::box_value(std::numeric_limits<double>::quiet_NaN()));
@@ -1098,6 +1109,15 @@ private:
             } else if (obj.try_as<controls::Grid>()) {
                 setProp(controls::Grid::PaddingProperty(), winrt::box_value(pad));
             }
+            return;
+        }
+
+        if (name == L"IconPanel" && parentType == L"Taskbar.TaskListButton") {
+            // A vertical taskbar's button slot is 42px but the stock icon panel is 48px wide, so the icons spill
+            // 6px to one side and sit off-centre next to the Start button. Cap the panel at the slot width.
+            setProp(
+                xaml::FrameworkElement::MaxWidthProperty(),
+                winrt::box_value(vertical ? 42.0 : std::numeric_limits<double>::infinity()));
             return;
         }
 
@@ -1689,6 +1709,11 @@ private:
             return;
         }
 
+        if (name == L"IconPanel" && parentType == L"Taskbar.TaskListButton") {
+            ApplyLayoutProps(obj, type, name, parentType, true);
+            return;
+        }
+
         if (name == L"RunningIndicator") {
             ApplyLayoutProps(obj, type, name, parentType, true);
             // Keep right-edge indicator locked on Right even when VisualStateManager updates active app state.
@@ -1992,6 +2017,7 @@ private:
                     || (t.type == L"Taskbar.ExperienceToggleButton" && t.name == L"LaunchListButton")
                     || t.name == L"SystemTrayFrameGrid"
                     || t.name == L"RunningIndicator"
+                    || (t.name == L"IconPanel" && t.parentType == L"Taskbar.TaskListButton")
                     || (t.name == L"ExperienceToggleButtonRootPanel"
                         && t.parentType == L"Taskbar.AugmentedEntryPointButton")) {
                     targets.push_back(t);
