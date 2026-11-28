@@ -989,6 +989,41 @@ private:
         }
     }
 
+    // Records the current original value once per (object, property, orientation) before overwriting,
+    // so properties first touched after an edge change (e.g. Height when moving to vertical, Width when
+    // moving to horizontal) are always tracked and restored on exit.
+    void SaveOnceAndSet(
+        xaml::DependencyObject const& obj,
+        xaml::DependencyProperty const& prop,
+        winrt::Windows::Foundation::IInspectable const& value) {
+        try {
+            TaskbarEdge edge = GetTaskbarEdge();
+            bool vertical = (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right);
+            bool alreadySaved = false;
+            void* objAbi = winrt::get_abi(obj);
+            void* propAbi = winrt::get_abi(prop);
+            {
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                for (auto const& s : m_saved) {
+                    if (s.vertical == vertical && winrt::get_abi(s.prop) == propAbi) {
+                        if (auto existing = s.target.get()) {
+                            if (winrt::get_abi(existing) == objAbi) {
+                                alreadySaved = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!alreadySaved) {
+                SaveAndSet(obj, prop, value);
+            } else {
+                obj.SetValue(prop, value);
+            }
+        } catch (...) {
+        }
+    }
+
     void StyleNativeAcrylicInPlace(media::AcrylicBrush const& ac) {
         try {
             {
@@ -1049,7 +1084,7 @@ private:
             if (save) {
                 SaveAndSet(obj, prop, val);
             } else {
-                try { obj.SetValue(prop, val); } catch (...) {}
+                SaveOnceAndSet(obj, prop, val);
             }
         };
 
@@ -1974,19 +2009,63 @@ private:
         }
         TaskbarEdge nowEdge = GetTaskbarEdge();
         bool nowVertical = (nowEdge == TaskbarEdge::Left || nowEdge == TaskbarEdge::Right);
+        // Pass 1: clear orientation-specific layout properties saved in the OTHER orientation so no stale
+        // PuwBar override (e.g. Height=NaN or Width=NaN from the previous edge) survives.
         for (auto it = items.rbegin(); it != items.rend(); ++it) {
+            if (it->vertical == nowVertical || !IsOrientationLayoutProperty(it->prop)) continue;
+            try {
+                if (auto obj = it->target.get()) {
+                    auto prop = it->prop;
+                    RunOnObjectThread(obj, [obj, prop]() {
+                        obj.ClearValue(prop);
+                    });
+                }
+            } catch (...) {
+            }
+        }
+        // Pass 2: restore all non-layout properties and layout originals belonging to the CURRENT orientation.
+        for (auto it = items.rbegin(); it != items.rend(); ++it) {
+            if (it->vertical != nowVertical && IsOrientationLayoutProperty(it->prop)) continue;
             try {
                 if (auto obj = it->target.get()) {
                     auto prop = it->prop;
                     auto original = it->original;
-                    // The orientation changed since this was saved: the recorded layout value belongs to the other
-                    // orientation and would overwrite what Explorer set for this one (the taskbar then stays blank).
-                    bool wasUnset = it->wasUnset || (it->vertical != nowVertical && IsOrientationLayoutProperty(prop));
+                    bool wasUnset = it->wasUnset;
                     RunOnObjectThread(obj, [obj, prop, original, wasUnset]() {
                         if (wasUnset) {
                             obj.ClearValue(prop);
                         } else if (original) {
                             obj.SetValue(prop, original);
+                        }
+                    });
+                }
+            } catch (...) {
+            }
+        }
+        // Pass 3: force a full measure/arrange pass on the taskbar frames and newly un-collapsed BackgroundControl
+        // so Windows immediately repaints the native taskbar at the current orientation's exact dimensions.
+        std::vector<TrackedElement> layoutTargets;
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            for (auto const& t : m_tracked) {
+                if (t.type == L"Taskbar.TaskbarFrame"
+                    || (t.name == L"RootGrid" && t.parentType == L"Taskbar.TaskbarFrame")
+                    || (t.type == L"Taskbar.TaskbarBackground" && t.name == L"BackgroundControl")
+                    || t.name == L"SystemTrayFrameGrid") {
+                    layoutTargets.push_back(t);
+                }
+            }
+        }
+        for (auto const& t : layoutTargets) {
+            try {
+                if (auto obj = t.target.get()) {
+                    RunOnObjectThread(obj, [obj]() {
+                        if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
+                            try {
+                                fe.InvalidateMeasure();
+                                fe.InvalidateArrange();
+                                fe.UpdateLayout();
+                            } catch (...) {}
                         }
                     });
                 }
