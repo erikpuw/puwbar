@@ -146,8 +146,9 @@ pub fn open(owner: HWND) {
             hinst,
             null(),
         );
-        SetThreadDpiAwarenessContext(old);
+        // Stay DPI aware until the window is fully set up: a region or size set from an unaware thread gets scaled again.
         if hwnd.is_null() {
+            SetThreadDpiAwarenessContext(old);
             return;
         }
         // The window region below makes the corners; keep DWM from rounding them a second time (33, DWMWCP_DONOTROUND = 1).
@@ -163,6 +164,7 @@ pub fn open(owner: HWND) {
             Ok(g) => g,
             Err(_) => {
                 DestroyWindow(hwnd);
+                SetThreadDpiAwarenessContext(old);
                 return;
             }
         };
@@ -182,6 +184,7 @@ pub fn open(owner: HWND) {
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
         render(hwnd);
+        SetThreadDpiAwarenessContext(old);
     }
 }
 
