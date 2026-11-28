@@ -13,12 +13,12 @@ use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST},
     System::{
+        Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, MODULEENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32},
         Registry::*,
         Threading::{CreateEventW, SetEvent},
     },
     UI::{
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
-        Shell::ShellExecuteW,
         WindowsAndMessaging::*,
     },
 };
@@ -98,6 +98,38 @@ unsafe fn window_line(class: &str) -> String {
     )
 }
 
+/// The puwbar_tap DLLs loaded in Explorer; the one belonging to this build is marked. Old builds pile up there.
+unsafe fn loaded_taps(current: &str) -> String {
+    let hwnd = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
+    if hwnd.is_null() {
+        return "(taskbar window not found)".into();
+    }
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    let snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if snap == INVALID_HANDLE_VALUE {
+        return "(cannot list the modules of Explorer)".into();
+    }
+    let mut entry: MODULEENTRY32W = std::mem::zeroed();
+    entry.dwSize = std::mem::size_of::<MODULEENTRY32W>() as u32;
+    let mut names = Vec::new();
+    let mut more = Module32FirstW(snap, &mut entry);
+    while more != 0 {
+        let len = entry.szModule.iter().position(|&c| c == 0).unwrap_or(entry.szModule.len());
+        let name = String::from_utf16_lossy(&entry.szModule[..len]);
+        if name.to_ascii_lowercase().starts_with("puwbar_tap") {
+            names.push(if name.eq_ignore_ascii_case(current) { format!("{name} (this build)") } else { name });
+        }
+        more = Module32NextW(snap, &mut entry);
+    }
+    CloseHandle(snap);
+    if names.is_empty() {
+        "none".into()
+    } else {
+        names.join(", ")
+    }
+}
+
 /// The report text: machine facts first, then the XAML tree from the tap.
 unsafe fn build(tree: &str) -> String {
     let nt = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
@@ -109,6 +141,9 @@ unsafe fn build(tree: &str) -> String {
     let _ = writeln!(r, "windows: {} {} build {}.{}", opt(reg_string(HKEY_LOCAL_MACHINE, nt, "ProductName")), opt(reg_string(HKEY_LOCAL_MACHINE, nt, "DisplayVersion")), opt(reg_string(HKEY_LOCAL_MACHINE, nt, "CurrentBuild")), opt(reg_dword(HKEY_LOCAL_MACHINE, nt, "UBR")));
     let prefs = tap::prefs();
     let _ = writeln!(r, "puwbar settings: style={} surfaces={:#04x} english={} autostart={}", prefs.style, prefs.surfaces, prefs.english, prefs.autostart);
+    let current = tap::tap_dll_path().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default();
+    let _ = writeln!(r, "tap dll of this build: {current}");
+    let _ = writeln!(r, "tap dlls loaded in Explorer: {}", loaded_taps(&current));
     let _ = writeln!(r, "\n[taskbar]");
     let _ = writeln!(r, "{}", window_line("Shell_TrayWnd"));
     let _ = writeln!(r, "{}", window_line("Shell_SecondaryTrayWnd"));
@@ -136,7 +171,7 @@ fn write_report(text: &str) -> Result<PathBuf, String> {
     std::fs::write(&fallback, text).map(|_| fallback).map_err(|e| e.to_string())
 }
 
-/// Asks the tap for the XAML tree, builds the report, tells the user where it went and shows it in Explorer.
+/// Asks the tap for the XAML tree, builds the report and tells the user where it went.
 /// Blocks for up to a few seconds, so call it from a worker thread.
 pub fn run_and_report() {
     let english = tap::prefs().english;
@@ -162,8 +197,8 @@ pub fn run_and_report() {
         let text = build(&tree);
         let (title, body) = match write_report(&text) {
             Ok(path) => {
-                let arg = format!("/select,\"{}\"", path.display());
-                ShellExecuteW(null_mut(), wide("open").as_ptr(), wide("explorer.exe").as_ptr(), wide(&arg).as_ptr(), null(), SW_SHOWNORMAL);
+                // No explorer.exe launch here: starting it from this (possibly elevated) process can restart the shell,
+                // and PuwBar then re-attaches everything.
                 if english {
                     ("PuwBar diagnostics", format!("Report saved to:\n{}\n\nSend this file back.", path.display()))
                 } else {
