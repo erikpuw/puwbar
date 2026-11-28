@@ -45,8 +45,12 @@ const DRAG_H: f32 = 44.0;
 const RADIUS: f32 = 16.0;
 /// Screen y where the scrolling body starts, just under the title block.
 const BODY_TOP: f32 = 108.0;
-/// How far the Look page scrolls (stage + five style cards are taller than the window).
-const LOOK_SCROLL: f32 = 30.0;
+/// Bottom edge (page coordinates) of each page's content, in page order; a page scrolls only when it reaches past the window.
+const PAGE_BOTTOM: [f32; 5] = [422.0, 416.0, 464.0, 342.0, 494.0];
+
+fn max_scroll(page: u8) -> f32 {
+    (PAGE_BOTTOM[(page as usize).min(PAGE_BOTTOM.len() - 1)] - (H - 12.0)).max(0.0)
+}
 const PAD: f32 = 30.0;
 const CX: f32 = NAV_W + PAD;
 const CW: f32 = W - CX - PAD;
@@ -269,7 +273,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_MOUSEWHEEL => {
             let notches = ((w >> 16) & 0xffff) as i16 as f32 / 120.0;
             with_state(|st| {
-                let max = if st.page == 1 { LOOK_SCROLL } else { 0.0 };
+                let max = max_scroll(st.page);
                 st.scroll = (st.scroll - notches * 48.0).clamp(0.0, max);
             });
             InvalidateRect(hwnd, null(), 0);
@@ -604,7 +608,7 @@ unsafe fn draw(p: &mut Pen, page: u8, scroll: f32, style: u32, surfaces: u32, au
     p.dy = 0.0;
     p.clip_top = f32::MIN;
 
-    let max = if page == 1 { LOOK_SCROLL } else { 0.0 };
+    let max = max_scroll(page);
     if max > 0.0 {
         let track = H - 24.0;
         let thumb = track * H / (H + max);
@@ -703,16 +707,10 @@ unsafe fn page_overview(p: &mut Pen, style: u32, surfaces: u32, autostart: bool)
 }
 
 unsafe fn page_look(p: &mut Pen, style: u32) {
-    // Live preview: the chosen style on a stand-in wallpaper.
-    let stage = (CX, 128.0, CW, 150.0);
-    p.gradient(stage, 14.0, 0xFF4A7BD6, 0xFF8A5BD0);
-    p.stroke(stage, 14.0, LINE, 1.0);
-    pill_art(p, (stage.0 + (CW - 300.0) / 2.0, stage.1 + stage.3 - 62.0, 300.0, 44.0), style as usize, 6);
-
     let (cw, ch, gap) = ((CW - 12.0) / 2.0, 88.0, 12.0);
     for (i, (vi, en, dvi, den)) in STYLES.iter().enumerate() {
         let (col, row) = ((i % 2) as f32, (i / 2) as f32);
-        let r = (CX + col * (cw + gap), 290.0 + row * (ch + gap), cw, ch);
+        let r = (CX + col * (cw + gap), 128.0 + row * (ch + gap), cw, ch);
         let act = Act::Style(i as u32);
         let on = style == i as u32;
         p.fill(r, 12.0, if on { ACCENT_SOFT } else if p.hot(act) { CARD_HOT } else { CARD });
