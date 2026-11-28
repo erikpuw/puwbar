@@ -10,44 +10,47 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::{
-        Dwm::DwmSetWindowAttribute,
+        Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute},
         Gdi::{
-            BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint,
+            AlphaBlend, BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
+            BITMAPINFO, BITMAPINFOHEADER, BLACKNESS, BLENDFUNCTION, DIB_RGB_COLORS,
             GetMonitorInfoW, InvalidateRect, MonitorFromPoint, ScreenToClient, SelectObject, MONITORINFO,
-            MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
+            MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
         },
         GdiPlus as gp,
     },
-    System::LibraryLoader::GetModuleHandleW,
+    System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
     UI::{
         HiDpi::{
             GetDpiForMonitor, GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
             MDT_EFFECTIVE_DPI,
         },
-        Controls::WM_MOUSELEAVE,
+        Controls::{MARGINS, WM_MOUSELEAVE},
+        Shell::ShellExecuteW,
         Input::KeyboardAndMouse::{ReleaseCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE},
         WindowsAndMessaging::*,
     },
 };
 
-const W: f32 = 760.0;
-const H: f32 = 520.0;
-const NAV_W: f32 = 196.0;
+const W: f32 = 780.0;
+const H: f32 = 540.0;
+const NAV_W: f32 = 208.0;
 const DRAG_H: f32 = 48.0;
 const PAD: f32 = 30.0;
 const CX: f32 = NAV_W + PAD;
 const CW: f32 = W - CX - PAD;
 
-const BG: u32 = 0xFF16171A;
-const NAV: u32 = 0xFF111214;
-const CARD: u32 = 0xFF1F2024;
-const CARD_HOT: u32 = 0xFF27282D;
-const LINE: u32 = 0xFF2E2F36;
-const TEXT: u32 = 0xFFF2F3F5;
-const MUTED: u32 = 0xFF9A9CA6;
-const ACCENT: u32 = 0xFF4C8DFF;
-const ACCENT_SOFT: u32 = 0x334C8DFF;
-const OFF: u32 = 0xFF3A3B42;
+// The window sits on the DWM acrylic backdrop, so every fill is a translucent veil over it.
+const BG: u32 = 0x1A0E0F13;
+const NAV: u32 = 0x66000000;
+const CARD: u32 = 0x26FFFFFF;
+const CARD_HOT: u32 = 0x38FFFFFF;
+const LINE: u32 = 0x33FFFFFF;
+const TEXT: u32 = 0xFFF5F6F8;
+const MUTED: u32 = 0xFFA4A7B3;
+const ACCENT: u32 = 0xFF30D158;
+const ACCENT_SOFT: u32 = 0x3330D158;
+const OFF: u32 = 0x66787880;
 const DANGER: u32 = 0xFFFF6B6B;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +63,7 @@ enum Act {
     Reapply,
     Exit,
     Close,
+    Github,
 }
 
 type R = (f32, f32, f32, f32);
@@ -150,6 +154,12 @@ pub fn open(owner: HWND) {
         // Round corners (DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2).
         let round: i32 = 2;
         DwmSetWindowAttribute(hwnd, 33, (&round as *const i32).cast(), 4);
+        // Dark frame (DWMWA_USE_IMMERSIVE_DARK_MODE = 20) on a transient acrylic backdrop (DWMWA_SYSTEMBACKDROP_TYPE = 38, 3).
+        let on: i32 = 1;
+        DwmSetWindowAttribute(hwnd, 20, (&on as *const i32).cast(), 4);
+        blur_behind(hwnd);
+        let margins = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
+        DwmExtendFrameIntoClientArea(hwnd, &margins);
         STATE.with(|s| {
             *s.borrow_mut() = Some(State {
                 hwnd,
@@ -164,6 +174,33 @@ pub fn open(owner: HWND) {
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
     }
+}
+
+/// Acrylic blur of everything behind the window (the undocumented accent policy that shell flyouts use).
+unsafe fn blur_behind(hwnd: HWND) {
+    #[repr(C)]
+    struct AccentPolicy {
+        state: u32,
+        flags: u32,
+        color: u32,
+        anim: u32,
+    }
+    #[repr(C)]
+    struct CompAttr {
+        attr: u32,
+        data: *mut std::ffi::c_void,
+        size: u32,
+    }
+    type SetWca = unsafe extern "system" fn(HWND, *mut CompAttr) -> i32;
+    let user32 = GetModuleHandleW(wide("user32.dll").as_ptr());
+    let Some(f) = GetProcAddress(user32, c"SetWindowCompositionAttribute".as_ptr().cast()) else {
+        return;
+    };
+    let set: SetWca = std::mem::transmute(f);
+    // State 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND; colour is AABBGGRR, a dark neutral veil at about 45%.
+    let mut policy = AccentPolicy { state: 4, flags: 2, color: 0x73130F0E, anim: 0 };
+    let mut data = CompAttr { attr: 19, data: (&mut policy as *mut AccentPolicy).cast(), size: std::mem::size_of::<AccentPolicy>() as u32 };
+    set(hwnd, &mut data);
 }
 
 fn xy(l: LPARAM, k: f32) -> (f32, f32) {
@@ -305,6 +342,9 @@ unsafe fn run(hwnd: HWND, act: Act) {
             tap::apply_language(owner, en);
         }
         Act::Reapply => tap::reapply(),
+        Act::Github => {
+            ShellExecuteW(null_mut(), wide("open").as_ptr(), wide("https://github.com/erikpuw/puwbar").as_ptr(), null(), null(), SW_SHOWNORMAL);
+        }
     }
     InvalidateRect(hwnd, null(), 0);
 }
@@ -314,6 +354,7 @@ unsafe fn run(hwnd: HWND, act: Act) {
 struct Pen {
     g: *mut gp::GpGraphics,
     fam: *mut gp::GpFontFamily,
+    ifam: *mut gp::GpFontFamily,
     fmt: [*mut gp::GpStringFormat; 4],
     k: f32,
     hits: Vec<(R, Act)>,
@@ -390,6 +431,21 @@ impl Pen {
         gp::GdipDeleteFont(font);
     }
 
+    /// One glyph of the Segoe Fluent Icons font, centred in `r`.
+    unsafe fn icon(&self, r: R, glyph: &str, size: f32, color: u32) {
+        if self.ifam.is_null() {
+            return;
+        }
+        let mut font = null_mut();
+        gp::GdipCreateFont(self.ifam, size * self.k, 0, gp::UnitPixel, &mut font);
+        let mut b = null_mut();
+        gp::GdipCreateSolidFill(color, &mut b);
+        let rect = gp::RectF { X: r.0 * self.k, Y: r.1 * self.k, Width: r.2 * self.k, Height: r.3 * self.k };
+        gp::GdipDrawString(self.g, wide(glyph).as_ptr(), -1, font, &rect, self.fmt[1], b.cast());
+        gp::GdipDeleteBrush(b.cast());
+        gp::GdipDeleteFont(font);
+    }
+
     fn hot(&self, a: Act) -> bool {
         self.hover == Some(a)
     }
@@ -405,8 +461,8 @@ impl Pen {
 
     unsafe fn button(&mut self, r: R, label: &str, a: Act, danger: bool) {
         let hot = self.hot(a);
-        let base = if danger { 0x22FF6B6B } else { CARD };
-        let over = if danger { 0x44FF6B6B } else { CARD_HOT };
+        let base = if danger { 0x26FF6B6B } else { CARD };
+        let over = if danger { 0x4DFF6B6B } else { CARD_HOT };
         self.fill(r, 9.0, if hot { over } else { base });
         self.stroke(r, 9.0, if danger { 0x66FF6B6B } else { LINE }, 1.0);
         self.text(r, label, 13.0, false, if danger { DANGER } else { TEXT }, 1);
@@ -414,24 +470,40 @@ impl Pen {
     }
 }
 
+
 unsafe fn paint(hwnd: HWND) {
     let mut ps: PAINTSTRUCT = std::mem::zeroed();
     let hdc = BeginPaint(hwnd, &mut ps);
     let k = GetDpiForWindow(hwnd) as f32 / 96.0;
     let (pw, ph) = ((W * k) as i32, (H * k) as i32);
     let mem = CreateCompatibleDC(hdc);
-    let bmp = CreateCompatibleBitmap(hdc, pw, ph);
+    // A top-down 32-bit surface that starts fully transparent, so the acrylic backdrop shows through unpainted areas.
+    let mut bi: BITMAPINFO = std::mem::zeroed();
+    bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    bi.bmiHeader.biWidth = pw;
+    bi.bmiHeader.biHeight = -ph;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    let mut bits: *mut std::ffi::c_void = null_mut();
+    let bmp = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
     let old = SelectObject(mem, bmp);
 
     let mut snap = None;
     with_state(|st| snap = Some((st.page, st.hover, st.prefs.style, st.prefs.surfaces, st.prefs.autostart, st.prefs.english)));
-    if let Some((page, hover, style, surfaces, autostart, english)) = snap {
+    if let (Some((page, hover, style, surfaces, autostart, english)), false) = (snap, bits.is_null()) {
         let mut g = null_mut();
         gp::GdipCreateFromHDC(mem, &mut g);
         gp::GdipSetSmoothingMode(g, gp::SmoothingModeAntiAlias);
-        gp::GdipSetTextRenderingHint(g, gp::TextRenderingHintAntiAliasGridFit);
+        gp::GdipSetTextRenderingHint(g, gp::TextRenderingHintAntiAlias);
         let mut fam = null_mut();
         gp::GdipCreateFontFamilyFromName(wide("Segoe UI").as_ptr(), null_mut(), &mut fam);
+        let mut ifam = null_mut();
+        if gp::GdipCreateFontFamilyFromName(wide("Segoe Fluent Icons").as_ptr(), null_mut(), &mut ifam) != 0 {
+            ifam = null_mut();
+            if gp::GdipCreateFontFamilyFromName(wide("Segoe MDL2 Assets").as_ptr(), null_mut(), &mut ifam) != 0 {
+                ifam = null_mut();
+            }
+        }
         let mut fmt = [null_mut(); 4];
         for (i, f) in fmt.iter_mut().enumerate() {
             let single = i < 3;
@@ -439,18 +511,33 @@ unsafe fn paint(hwnd: HWND) {
             gp::GdipSetStringFormatAlign(*f, if single { i as i32 } else { 0 });
             gp::GdipSetStringFormatLineAlign(*f, if single { 1 } else { 0 });
         }
-        let mut p = Pen { g, fam, fmt, k, hits: Vec::new(), hover, en: english };
+        let mut p = Pen { g, fam, ifam, fmt, k, hits: Vec::new(), hover, en: english };
         draw(&mut p, page, style, surfaces, autostart);
         let hits = std::mem::take(&mut p.hits);
         for f in fmt {
             gp::GdipDeleteStringFormat(f);
         }
+        if !ifam.is_null() {
+            gp::GdipDeleteFontFamily(ifam);
+        }
         gp::GdipDeleteFontFamily(fam);
         gp::GdipDeleteGraphics(g);
         with_state(|st| st.hits = hits);
+
+        // AlphaBlend wants premultiplied alpha; GDI+ leaves straight alpha.
+        let px = std::slice::from_raw_parts_mut(bits.cast::<u32>(), (pw * ph) as usize);
+        for v in px.iter_mut() {
+            let a = *v >> 24;
+            if a < 255 {
+                let ch = |sh: u32| (((*v >> sh) & 0xff) * a + 127) / 255;
+                *v = (a << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0);
+            }
+        }
+        BitBlt(hdc, 0, 0, pw, ph, null_mut(), 0, 0, BLACKNESS);
+        let blend = BLENDFUNCTION { BlendOp: 0, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: 1 };
+        AlphaBlend(hdc, 0, 0, pw, ph, mem, 0, 0, pw, ph, blend);
     }
 
-    BitBlt(hdc, 0, 0, pw, ph, mem, 0, 0, SRCCOPY);
     SelectObject(mem, old);
     DeleteObject(bmp);
     DeleteDC(mem);
@@ -465,14 +552,30 @@ const STYLES: [(&str, &str, &str, &str); 5] = [
     ("Trong suốt hoàn toàn", "Fully transparent", "Không nền, không viền, không blur.", "No fill, no rim, no blur, no shadow."),
 ];
 
+/// Segoe Fluent Icons glyphs for the five pages.
+const NAV_ICONS: [&str; 5] = ["\u{E80F}", "\u{E790}", "\u{E71D}", "\u{E713}", "\u{E946}"];
+
+/// The brand mark: a dark tile holding a pill of three dots. `s` is the tile size.
+unsafe fn logo(p: &Pen, x: f32, y: f32, s: f32) {
+    p.fill((x, y, s, s), s * 0.28, 0xF2191A1F);
+    let (pw, ph) = (s * 0.72, s * 0.34);
+    p.stroke((x + (s - pw) / 2.0, y + (s - ph) / 2.0, pw, ph), ph / 2.0, 0xFFFFFFFF, s * 0.036);
+    for i in 0..3 {
+        p.circle(x + s * 0.28 + i as f32 * s * 0.22, y + s / 2.0, s * 0.05, 0xFFFFFFFF);
+    }
+}
+
 unsafe fn draw(p: &mut Pen, page: u8, style: u32, surfaces: u32, autostart: bool) {
     p.fill((0.0, 0.0, W, H), 0.0, BG);
     p.fill((0.0, 0.0, NAV_W, H), 0.0, NAV);
     p.line((NAV_W, 0.0), (NAV_W, H), LINE, 1.0);
 
-    p.text((24.0, 14.0, NAV_W - 40.0, 28.0), "PuwBar", 17.0, true, TEXT, 0);
-    p.text((24.0, 40.0, NAV_W - 40.0, 20.0), concat!("v", env!("CARGO_PKG_VERSION")), 11.0, false, MUTED, 0);
+    logo(p, 22.0, 18.0, 36.0);
+    p.text((68.0, 17.0, NAV_W - 80.0, 20.0), "PuwBar", 15.0, true, TEXT, 0);
+    p.text((68.0, 36.0, NAV_W - 80.0, 18.0), concat!("v", env!("CARGO_PKG_VERSION")), 11.0, false, MUTED, 0);
+
     let pages = [
+        p.t("Tổng quan", "Overview"),
         p.t("Giao diện", "Look"),
         p.t("Bề mặt kính", "Glass surfaces"),
         p.t("Hệ thống", "System"),
@@ -483,12 +586,12 @@ unsafe fn draw(p: &mut Pen, page: u8, style: u32, surfaces: u32, autostart: bool
         let act = Act::Nav(i as u8);
         let on = page as usize == i;
         if on {
-            p.fill(r, 10.0, ACCENT_SOFT);
-            p.fill((r.0, r.1 + 9.0, 3.0, 18.0), 1.5, ACCENT);
+            p.fill(r, 10.0, 0x26FFFFFF);
         } else if p.hot(act) {
-            p.fill(r, 10.0, CARD);
+            p.fill(r, 10.0, 0x14FFFFFF);
         }
-        p.text((r.0 + 18.0, r.1, r.2 - 18.0, r.3), name, 13.5, on, if on { TEXT } else { MUTED }, 0);
+        p.icon((r.0 + 8.0, r.1, 28.0, r.3), NAV_ICONS[i], 16.0, if on { ACCENT } else { MUTED });
+        p.text((r.0 + 42.0, r.1, r.2 - 42.0, r.3), name, 13.5, false, if on { TEXT } else { MUTED }, 0);
         p.hit(r, act);
     }
 
@@ -501,19 +604,74 @@ unsafe fn draw(p: &mut Pen, page: u8, style: u32, surfaces: u32, autostart: bool
     p.hit(close, Act::Close);
 
     let (title, hint) = match page {
-        0 => (p.t("Giao diện", "Look"), p.t("Chọn kiểu taskbar. Áp dụng ngay, không cần khởi động lại.", "Pick the taskbar style. It applies at once, no restart.")),
-        1 => (p.t("Bề mặt kính", "Glass surfaces"), p.t("Chọn các cửa sổ hệ thống được phủ kính.", "Choose which system windows get the glass.")),
-        2 => (p.t("Hệ thống", "System"), p.t("Cách PuwBar chạy trên máy này.", "How PuwBar runs on this PC.")),
-        _ => (p.t("Giới thiệu", "About"), p.t("Biến taskbar Windows 11 thành các cụm kính nổi.", "Turns the Windows 11 taskbar into floating glass pills.")),
+        0 => (p.t("Tổng quan", "Overview"), p.t("Tình trạng hiện tại của PuwBar. Bấm một thẻ để chỉnh phần đó.", "How PuwBar is set up now. Click a card to change that part.")),
+        1 => (p.t("Giao diện", "Look"), p.t("Chọn kiểu taskbar. Áp dụng ngay, không cần khởi động lại.", "Pick the taskbar style. It applies at once, no restart.")),
+        2 => (p.t("Bề mặt kính", "Glass surfaces"), p.t("Chọn các cửa sổ hệ thống được phủ kính.", "Choose which system windows get the glass.")),
+        3 => (p.t("Hệ thống", "System"), p.t("Cách PuwBar chạy trên máy này.", "How PuwBar runs on this PC.")),
+        _ => (p.t("Giới thiệu", "About"), p.t(concat!("Phiên bản ", env!("CARGO_PKG_VERSION")), concat!("Version ", env!("CARGO_PKG_VERSION")))),
     };
     p.text((CX, 58.0, CW, 32.0), title, 22.0, true, TEXT, 0);
     p.text((CX, 90.0, CW, 22.0), hint, 12.5, false, MUTED, 0);
 
     match page {
-        0 => page_look(p, style),
-        1 => page_surfaces(p, surfaces),
-        2 => page_system(p, autostart),
+        0 => page_overview(p, style, surfaces, autostart),
+        1 => page_look(p, style),
+        2 => page_surfaces(p, surfaces),
+        3 => page_system(p, autostart),
         _ => page_about(p),
+    }
+}
+
+/// A clickable card; registers its own hit area.
+unsafe fn card(p: &mut Pen, r: R, act: Act) {
+    p.fill(r, 14.0, if p.hot(act) { CARD_HOT } else { CARD });
+    p.stroke(r, 14.0, LINE, 1.0);
+    p.hit(r, act);
+}
+
+unsafe fn page_overview(p: &mut Pen, style: u32, surfaces: u32, autostart: bool) {
+    let big_w = (CW - 12.0) * 0.6;
+    let big = (CX, 128.0, big_w, 112.0);
+    card(p, big, Act::Nav(1));
+    let (vi, en, _, _) = STYLES[(style as usize).min(STYLES.len() - 1)];
+    let on_count = tap::SURFACE_BITS.iter().filter(|b| surfaces & **b != 0).count();
+    p.text((big.0 + 18.0, big.1 + 12.0, big.2 - 36.0, 18.0), p.t("Giao diện", "Look"), 12.0, false, MUTED, 0);
+    p.text((big.0 + 18.0, big.1 + 34.0, big.2 - 36.0, 32.0), if p.en { en } else { vi }, 20.0, true, TEXT, 0);
+    let status = if p.en { format!("{on_count} of 7 glass surfaces on") } else { format!("{on_count} trên 7 khu vực kính đang bật") };
+    p.text((big.0 + 18.0, big.1 + 74.0, big.2 - 36.0, 22.0), &status, 12.0, false, ACCENT, 0);
+
+    let sx = CX + big_w + 12.0;
+    let sw = CW - big_w - 12.0;
+    let c1 = (sx, 128.0, sw, 50.0);
+    card(p, c1, Act::Nav(2));
+    p.text((c1.0 + 16.0, c1.1 + 5.0, sw - 24.0, 18.0), p.t("Khu vực kính", "Glass surfaces"), 11.0, false, MUTED, 0);
+    let val = if p.en { format!("{on_count} of 7") } else { format!("{on_count} trên 7") };
+    p.text((c1.0 + 16.0, c1.1 + 23.0, sw - 24.0, 22.0), &val, 13.5, true, TEXT, 0);
+    let c2 = (sx, 190.0, sw, 50.0);
+    card(p, c2, Act::Nav(3));
+    p.text((c2.0 + 16.0, c2.1 + 5.0, sw - 24.0, 18.0), p.t("Ngôn ngữ", "Language"), 11.0, false, MUTED, 0);
+    p.text((c2.0 + 16.0, c2.1 + 23.0, sw - 24.0, 22.0), if p.en { "English" } else { "Tiếng Việt" }, 13.5, true, TEXT, 0);
+
+    p.text((CX + 4.0, 258.0, CW, 20.0), p.t("Bật nhanh", "Quick toggles"), 12.0, false, MUTED, 0);
+    let group = (CX, 284.0, CW, 138.0);
+    p.fill(group, 14.0, CARD);
+    p.stroke(group, 14.0, LINE, 1.0);
+    let rows = [
+        (p.t("Khởi động cùng Windows", "Start with Windows"), Act::Autostart, autostart),
+        (p.t("Kính cho Start Menu", "Glass for Start Menu"), Act::Surface(tap::SURFACE_BITS[0]), surfaces & tap::SURFACE_BITS[0] != 0),
+        (p.t("Kính cho Control Center", "Glass for Control Center"), Act::Surface(tap::SURFACE_BITS[1]), surfaces & tap::SURFACE_BITS[1] != 0),
+    ];
+    for (i, (label, act, on)) in rows.into_iter().enumerate() {
+        let r = (group.0, group.1 + i as f32 * 46.0, group.2, 46.0);
+        if p.hot(act) {
+            p.fill((r.0 + 4.0, r.1 + 4.0, r.2 - 8.0, r.3 - 8.0), 10.0, 0x12FFFFFF);
+        }
+        p.text((r.0 + 18.0, r.1, r.2 - 90.0, r.3), label, 13.5, false, TEXT, 0);
+        p.switch(r.0 + r.2 - 60.0, r.1 + 12.0, on);
+        p.hit(r, act);
+        if i < 2 {
+            p.line((r.0 + 16.0, r.1 + r.3), (r.0 + r.2 - 16.0, r.1 + r.3), LINE, 1.0);
+        }
     }
 }
 
@@ -604,7 +762,7 @@ unsafe fn page_system(p: &mut Pen, autostart: bool) {
         let r = (lang.0 + lang.2 - 232.0 + i as f32 * 112.0, lang.1 + 13.0, 104.0, 30.0);
         let act = Act::Lang(*is_en);
         let on = en == *is_en;
-        p.fill(r, 8.0, if on { ACCENT_SOFT } else if p.hot(act) { CARD_HOT } else { OFF });
+        p.fill(r, 8.0, if on { ACCENT_SOFT } else if p.hot(act) { CARD_HOT } else { CARD });
         if on {
             p.stroke(r, 8.0, ACCENT, 1.2);
         }
@@ -620,10 +778,34 @@ unsafe fn page_system(p: &mut Pen, autostart: bool) {
 }
 
 unsafe fn page_about(p: &mut Pen) {
-    let card = (CX, 128.0, CW, 150.0);
-    p.fill(card, 14.0, CARD);
-    p.text((card.0 + 20.0, card.1 + 14.0, card.2 - 40.0, 26.0), concat!("PuwBar v", env!("CARGO_PKG_VERSION")), 16.0, true, TEXT, 0);
-    p.text((card.0 + 20.0, card.1 + 46.0, card.2 - 40.0, 22.0), p.t("Tác giả: erikpuw", "Author: erikpuw"), 12.5, false, MUTED, 0);
-    p.text((card.0 + 20.0, card.1 + 72.0, card.2 - 40.0, 22.0), "github.com/erikpuw/puwbar", 12.5, false, ACCENT, 0);
-    p.text((card.0 + 20.0, card.1 + 98.0, card.2 - 40.0, 40.0), p.t("Thoát PuwBar thì taskbar trở về nguyên bản.", "Quit PuwBar and the taskbar goes back to stock."), 12.5, false, MUTED, 0);
+    let mid = CX + CW / 2.0;
+    logo(p, mid - 36.0, 124.0, 72.0);
+    p.text((CX, 204.0, CW, 32.0), "PuwBar", 22.0, true, TEXT, 1);
+    p.text((CX, 234.0, CW, 20.0), p.t(concat!("Phiên bản ", env!("CARGO_PKG_VERSION")), concat!("Version ", env!("CARGO_PKG_VERSION"))), 12.0, false, MUTED, 1);
+
+    let bullets = [
+        p.t("Chia taskbar thành các cụm kính nổi, giữ nguyên chức năng gốc", "Splits the taskbar into floating glass pills, native features kept"),
+        p.t("Năm kiểu giao diện, từ kính mờ tới trong suốt hoàn toàn", "Five styles, from frosted glass to fully transparent"),
+        p.t("Phủ kính cho Start, Quick Settings, Thông báo, Lịch, Jump List", "Glass on Start, Quick Settings, Notifications, Calendar, Jump List"),
+        p.t("Taskbar ngang hoặc dọc, căn giữa hoặc căn trái", "Horizontal or vertical taskbar, centered or left-aligned"),
+        p.t("Thoát PuwBar là taskbar trở về nguyên bản", "Quit PuwBar and the taskbar goes back to stock"),
+        p.t("Nhẹ, viết bằng Rust và C++, không WebView", "Light, written in Rust and C++, no WebView"),
+    ];
+    for (i, line) in bullets.iter().enumerate() {
+        let y = 270.0 + i as f32 * 24.0;
+        p.circle(CX + 44.0, y + 11.0, 2.5, ACCENT);
+        p.text((CX + 58.0, y, CW - 80.0, 22.0), line, 12.5, false, 0xFFD9DBE2, 0);
+    }
+    p.text((CX, 424.0, CW, 20.0), p.t("Thấy PuwBar có ích thì cho tác giả một ngôi sao trên GitHub.", "If PuwBar helps, a star on GitHub is appreciated."), 11.5, false, MUTED, 1);
+
+    let gh = (mid - 146.0, 456.0, 130.0, 38.0);
+    let ghot = p.hot(Act::Github);
+    p.fill(gh, 19.0, if ghot { 0xFF4BE07A } else { ACCENT });
+    p.text(gh, p.t("Mở GitHub", "Open GitHub"), 13.0, true, 0xFF0B1A10, 1);
+    p.hit(gh, Act::Github);
+    let ex = (mid - 4.0, 456.0, 150.0, 38.0);
+    p.fill(ex, 19.0, if p.hot(Act::Exit) { CARD_HOT } else { 0x00000000 });
+    p.stroke(ex, 19.0, 0x66FFFFFF, 1.0);
+    p.text(ex, p.t("Thoát PuwBar", "Exit PuwBar"), 13.0, false, TEXT, 1);
+    p.hit(ex, Act::Exit);
 }
