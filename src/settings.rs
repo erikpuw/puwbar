@@ -440,7 +440,8 @@ impl Pen<'_> {
         self.g.rt.FillRoundedRectangle(&rr, &brush);
     }
 
-    unsafe fn text_in(&self, family: PCWSTR, r: R, s: &str, size: f32, bold: bool, c: u32, align: usize) {
+    unsafe fn text_in(&self, font: (PCWSTR, f32, bool), r: R, s: &str, c: u32, align: usize) {
+        let (family, size, bold) = font;
         let weight = if bold { DWRITE_FONT_WEIGHT_SEMI_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL };
         let Ok(fmt) = self.g.dw.CreateTextFormat(family, None, weight, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, w!("vi-VN")) else {
             return;
@@ -461,17 +462,17 @@ impl Pen<'_> {
 
     /// `align`: 0 left, 1 center, 2 right (single line, vertically centred); 3 wrapping paragraph, top-left.
     unsafe fn text(&self, r: R, s: &str, size: f32, bold: bool, c: u32, align: usize) {
-        self.text_in(w!("Segoe UI"), r, s, size, bold, c, align);
+        self.text_in((w!("Segoe UI"), size, bold), r, s, c, align);
     }
 
     unsafe fn title(&self, r: R, s: &str) {
-        self.text_in(self.g.title_family, r, s, 24.0, true, TEXT, 0);
+        self.text_in((self.g.title_family, 24.0, true), r, s, TEXT, 0);
     }
 
     /// One glyph of the Segoe Fluent Icons font, centred in `r`.
     unsafe fn icon(&self, r: R, glyph: &str, size: f32, c: u32) {
         if let Some(family) = self.g.icon_family {
-            self.text_in(family, r, glyph, size, false, c, 1);
+            self.text_in((family, size, false), r, glyph, c, 1);
         }
     }
 
@@ -552,10 +553,11 @@ unsafe fn icon_pixels() -> Option<(Vec<u8>, u32, u32)> {
     if lines == 0 {
         return None;
     }
-    if px.chunks_exact(4).all(|c| c[3] == 0) {
-        px.chunks_exact_mut(4).for_each(|c| c[3] = 255);
+    let pixels = px.as_chunks_mut::<4>().0;
+    if pixels.iter().all(|c| c[3] == 0) {
+        pixels.iter_mut().for_each(|c| c[3] = 255);
     }
-    for c in px.chunks_exact_mut(4) {
+    for c in pixels.iter_mut() {
         let a = c[3] as u32;
         for v in &mut c[..3] {
             *v = (*v as u32 * a / 255) as u8;
