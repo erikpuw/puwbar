@@ -12,7 +12,7 @@ use windows_sys::Win32::{
     Graphics::{
         Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute},
         Gdi::{
-            AlphaBlend, BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
+            AlphaBlend, BeginPaint, BitBlt, CreateCompatibleDC, CreateRoundRectRgn, CreateDIBSection, DeleteDC, DeleteObject, EndPaint, SetWindowRgn,
             BITMAPINFO, BITMAPINFOHEADER, BLACKNESS, BLENDFUNCTION, DIB_RGB_COLORS,
             GetMonitorInfoW, InvalidateRect, MonitorFromPoint, ScreenToClient, SelectObject, MONITORINFO,
             MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
@@ -32,24 +32,27 @@ use windows_sys::Win32::{
     },
 };
 
-const W: f32 = 780.0;
-const H: f32 = 540.0;
-const NAV_W: f32 = 208.0;
-const DRAG_H: f32 = 48.0;
+const W: f32 = 760.0;
+const H: f32 = 560.0;
+const NAV_W: f32 = 212.0;
+const DRAG_H: f32 = 44.0;
+const RADIUS: f32 = 16.0;
+/// How far the Look page scrolls (stage + five style cards are taller than the window).
+const LOOK_SCROLL: f32 = 120.0;
 const PAD: f32 = 30.0;
 const CX: f32 = NAV_W + PAD;
 const CW: f32 = W - CX - PAD;
 
 // The window sits on the DWM acrylic backdrop, so every fill is a translucent veil over it.
-const BG: u32 = 0x1A0E0F13;
-const NAV: u32 = 0x66000000;
-const CARD: u32 = 0x26FFFFFF;
-const CARD_HOT: u32 = 0x38FFFFFF;
-const LINE: u32 = 0x33FFFFFF;
+const BG: u32 = 0xC20E0E12;
+const NAV: u32 = 0x0AFFFFFF;
+const CARD: u32 = 0x0FFFFFFF;
+const CARD_HOT: u32 = 0x1AFFFFFF;
+const LINE: u32 = 0x14FFFFFF;
 const TEXT: u32 = 0xFFF5F6F8;
-const MUTED: u32 = 0xFFA4A7B3;
-const ACCENT: u32 = 0xFF30D158;
-const ACCENT_SOFT: u32 = 0x3330D158;
+const MUTED: u32 = 0x99FFFFFF;
+const ACCENT: u32 = 0xFF33D649;
+const ACCENT_SOFT: u32 = 0x2033D649;
 const OFF: u32 = 0x66787880;
 const DANGER: u32 = 0xFFFF6B6B;
 
@@ -77,6 +80,7 @@ struct State {
     hits: Vec<(R, Act)>,
     prefs: tap::Prefs,
     tracking: bool,
+    scroll: f32,
 }
 
 thread_local! {
@@ -111,7 +115,7 @@ pub fn open(owner: HWND) {
         let class = wide("PuwBarSettings");
         let mut wc: WNDCLASSEXW = std::mem::zeroed();
         wc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
-        wc.style = CS_DROPSHADOW | CS_HREDRAW | CS_VREDRAW;
+        wc.style = CS_HREDRAW | CS_VREDRAW;
         wc.lpfnWndProc = Some(proc);
         wc.hInstance = hinst;
         wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
@@ -152,8 +156,8 @@ pub fn open(owner: HWND) {
         if hwnd.is_null() {
             return;
         }
-        // Round corners (DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2).
-        let round: i32 = 2;
+        // The window region below makes the corners; keep DWM from rounding them a second time (33, DWMWCP_DONOTROUND = 1).
+        let round: i32 = 1;
         DwmSetWindowAttribute(hwnd, 33, (&round as *const i32).cast(), 4);
         // Dark frame (DWMWA_USE_IMMERSIVE_DARK_MODE = 20) on a transient acrylic backdrop (DWMWA_SYSTEMBACKDROP_TYPE = 38, 3).
         let on: i32 = 1;
@@ -161,6 +165,8 @@ pub fn open(owner: HWND) {
         blur_behind(hwnd);
         let margins = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
         DwmExtendFrameIntoClientArea(hwnd, &margins);
+        let corner = (RADIUS * 2.0 * k) as i32;
+        SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, corner, corner), 1);
         STATE.with(|s| {
             *s.borrow_mut() = Some(State {
                 hwnd,
@@ -170,6 +176,7 @@ pub fn open(owner: HWND) {
                 hits: Vec::new(),
                 prefs: tap::prefs(),
                 tracking: false,
+                scroll: 0.0,
             })
         });
         ShowWindow(hwnd, SW_SHOW);
@@ -198,8 +205,8 @@ unsafe fn blur_behind(hwnd: HWND) {
         return;
     };
     let set: SetWca = std::mem::transmute(f);
-    // State 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND; colour is AABBGGRR, a dark neutral veil at about 45%.
-    let mut policy = AccentPolicy { state: 4, flags: 2, color: 0x73130F0E, anim: 0 };
+    // State 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND; colour is AABBGGRR, almost no tint, the veil is painted by the window itself.
+    let mut policy = AccentPolicy { state: 4, flags: 2, color: 0x01130F0E, anim: 0 };
     let mut data = CompAttr { attr: 19, data: (&mut policy as *mut AccentPolicy).cast(), size: std::mem::size_of::<AccentPolicy>() as u32 };
     set(hwnd, &mut data);
 }
@@ -285,6 +292,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             }
             return 0;
         }
+        WM_MOUSEWHEEL => {
+            let notches = ((w >> 16) & 0xffff) as i16 as f32 / 120.0;
+            with_state(|st| {
+                let max = if st.page == 1 { LOOK_SCROLL } else { 0.0 };
+                st.scroll = (st.scroll - notches * 48.0).clamp(0.0, max);
+            });
+            InvalidateRect(hwnd, null(), 0);
+            return 0;
+        }
         WM_KEYDOWN if w == VK_ESCAPE as usize => {
             DestroyWindow(hwnd);
             return 0;
@@ -317,7 +333,10 @@ unsafe fn run(hwnd: HWND, act: Act) {
             tap::quit();
             return;
         }
-        Act::Nav(p) => with_state(|st| st.page = p),
+        Act::Nav(p) => with_state(|st| {
+            st.page = p;
+            st.scroll = 0.0;
+        }),
         Act::Style(v) => {
             tap::apply_style(v);
             with_state(|st| st.prefs.style = v);
@@ -358,6 +377,9 @@ unsafe fn run(hwnd: HWND, act: Act) {
 struct Pen {
     g: *mut gp::GpGraphics,
     fam: *mut gp::GpFontFamily,
+    dfam: *mut gp::GpFontFamily,
+    /// Vertical shift of everything drawn from now on (page scroll and the title offset), so hit areas follow.
+    dy: f32,
     ifam: *mut gp::GpFontFamily,
     fmt: [*mut gp::GpStringFormat; 4],
     k: f32,
@@ -422,6 +444,19 @@ impl Pen {
         gp::GdipDeletePen(pen);
     }
 
+    /// Diagonal two-colour gradient inside a rounded rect (a stand-in wallpaper for the style previews).
+    unsafe fn gradient(&self, r: R, rad: f32, c1: u32, c2: u32) {
+        let k = self.k;
+        let a = gp::PointF { X: r.0 * k, Y: r.1 * k };
+        let b = gp::PointF { X: (r.0 + r.2) * k, Y: (r.1 + r.3) * k };
+        let mut br = null_mut();
+        gp::GdipCreateLineBrush(&a, &b, c1, c2, 3, &mut br); // 3 = WrapModeTileFlipXY, no seam
+        let path = self.path(r, rad);
+        gp::GdipFillPath(self.g, br.cast(), path);
+        gp::GdipDeletePath(path);
+        gp::GdipDeleteBrush(br.cast());
+    }
+
     /// `align`: 0 left, 1 center, 2 right (single line, vertically centred); 3 wrapping paragraph, top-left.
     unsafe fn text(&self, r: R, s: &str, size: f32, bold: bool, color: u32, align: usize) {
         let mut font = null_mut();
@@ -455,7 +490,7 @@ impl Pen {
     }
 
     fn hit(&mut self, r: R, a: Act) {
-        self.hits.push((r, a));
+        self.hits.push(((r.0, r.1 + self.dy, r.2, r.3), a));
     }
 
     unsafe fn switch(&mut self, x: f32, y: f32, on: bool) {
@@ -493,14 +528,18 @@ unsafe fn paint(hwnd: HWND) {
     let old = SelectObject(mem, bmp);
 
     let mut snap = None;
-    with_state(|st| snap = Some((st.page, st.hover, st.prefs.style, st.prefs.surfaces, st.prefs.autostart, st.prefs.english)));
-    if let (Some((page, hover, style, surfaces, autostart, english)), false) = (snap, bits.is_null()) {
+    with_state(|st| snap = Some((st.page, st.hover, st.prefs.style, st.prefs.surfaces, st.prefs.autostart, st.prefs.english, st.scroll)));
+    if let (Some((page, hover, style, surfaces, autostart, english, scroll)), false) = (snap, bits.is_null()) {
         let mut g = null_mut();
         gp::GdipCreateFromHDC(mem, &mut g);
         gp::GdipSetSmoothingMode(g, gp::SmoothingModeAntiAlias);
         gp::GdipSetTextRenderingHint(g, gp::TextRenderingHintAntiAlias);
         let mut fam = null_mut();
         gp::GdipCreateFontFamilyFromName(wide("Segoe UI").as_ptr(), null_mut(), &mut fam);
+        let mut dfam = null_mut();
+        if gp::GdipCreateFontFamilyFromName(wide("Segoe UI Variable Display").as_ptr(), null_mut(), &mut dfam) != 0 {
+            dfam = fam;
+        }
         let mut ifam = null_mut();
         if gp::GdipCreateFontFamilyFromName(wide("Segoe Fluent Icons").as_ptr(), null_mut(), &mut ifam) != 0 {
             ifam = null_mut();
@@ -515,14 +554,17 @@ unsafe fn paint(hwnd: HWND) {
             gp::GdipSetStringFormatAlign(*f, if single { i as i32 } else { 0 });
             gp::GdipSetStringFormatLineAlign(*f, if single { 1 } else { 0 });
         }
-        let mut p = Pen { g, fam, ifam, fmt, k, hits: Vec::new(), hover, en: english };
-        draw(&mut p, page, style, surfaces, autostart);
+        let mut p = Pen { g, fam, dfam, dy: 0.0, ifam, fmt, k, hits: Vec::new(), hover, en: english };
+        draw(&mut p, page, scroll, style, surfaces, autostart);
         let hits = std::mem::take(&mut p.hits);
         for f in fmt {
             gp::GdipDeleteStringFormat(f);
         }
         if !ifam.is_null() {
             gp::GdipDeleteFontFamily(ifam);
+        }
+        if dfam != fam {
+            gp::GdipDeleteFontFamily(dfam);
         }
         gp::GdipDeleteFontFamily(fam);
         gp::GdipDeleteGraphics(g);
@@ -581,15 +623,50 @@ unsafe fn logo(p: &Pen, x: f32, y: f32, s: f32) {
     }
 }
 
-unsafe fn draw(p: &mut Pen, page: u8, style: u32, surfaces: u32, autostart: bool) {
+unsafe fn draw(p: &mut Pen, page: u8, scroll: f32, style: u32, surfaces: u32, autostart: bool) {
     p.fill((0.0, 0.0, W, H), 0.0, BG);
     p.fill((0.0, 0.0, NAV_W, H), 0.0, NAV);
     p.line((NAV_W, 0.0), (NAV_W, H), LINE, 1.0);
 
-    logo(p, 22.0, 18.0, 36.0);
-    p.text((68.0, 17.0, NAV_W - 80.0, 20.0), "PuwBar", 15.0, true, TEXT, 0);
-    p.text((68.0, 36.0, NAV_W - 80.0, 18.0), concat!("v", env!("CARGO_PKG_VERSION")), 11.0, false, MUTED, 0);
+    // Page content: shifted up a little (the title sits near y 44) and by the scroll offset, clipped to the content area.
+    let k = p.k;
+    p.dy = -12.0 - scroll;
+    gp::GdipSetClipRect(p.g, (NAV_W + 1.0) * k, 0.0, (W - NAV_W) * k, H * k, 0);
+    gp::GdipTranslateWorldTransform(p.g, 0.0, p.dy * k, 0);
+    let (title, hint) = match page {
+        0 => (p.t("Tổng quan", "Overview"), p.t("Tình trạng hiện tại của PuwBar. Bấm một thẻ để chỉnh phần đó.", "How PuwBar is set up now. Click a card to change that part.")),
+        1 => (p.t("Giao diện", "Look"), p.t("Chọn kiểu taskbar. Áp dụng ngay, không cần khởi động lại.", "Pick the taskbar style. It applies at once, no restart.")),
+        2 => (p.t("Bề mặt kính", "Glass surfaces"), p.t("Chọn các cửa sổ hệ thống được phủ kính.", "Choose which system windows get the glass.")),
+        3 => (p.t("Hệ thống", "System"), p.t("Cách PuwBar chạy trên máy này.", "How PuwBar runs on this PC.")),
+        _ => (p.t("Giới thiệu", "About"), ""),
+    };
+    let body_fam = p.fam;
+    p.fam = p.dfam;
+    p.text((CX, 58.0, CW, 32.0), title, 24.0, true, TEXT, 0);
+    p.fam = body_fam;
+    p.text((CX, 90.0, CW, 22.0), hint, 12.0, false, MUTED, 0);
+    match page {
+        0 => page_overview(p, style, surfaces, autostart),
+        1 => page_look(p, style),
+        2 => page_surfaces(p, surfaces),
+        3 => page_system(p, autostart),
+        _ => page_about(p),
+    }
+    gp::GdipResetWorldTransform(p.g);
+    gp::GdipResetClip(p.g);
+    p.dy = 0.0;
 
+    let max = if page == 1 { LOOK_SCROLL } else { 0.0 };
+    if max > 0.0 {
+        let track = H - 24.0;
+        let thumb = track * H / (H + max);
+        p.fill((W - 8.0, 12.0 + scroll / max * (track - thumb), 3.0, thumb), 1.5, 0x40FFFFFF);
+    }
+
+    // Navigation
+    logo(p, 18.0, 20.0, 30.0);
+    p.text((58.0, 19.0, NAV_W - 70.0, 18.0), "PuwBar", 14.0, true, TEXT, 0);
+    p.text((58.0, 36.0, NAV_W - 70.0, 16.0), p.t(concat!("Phiên bản ", env!("CARGO_PKG_VERSION")), concat!("Version ", env!("CARGO_PKG_VERSION"))), 11.0, false, MUTED, 0);
     let pages = [
         p.t("Tổng quan", "Overview"),
         p.t("Giao diện", "Look"),
@@ -598,20 +675,20 @@ unsafe fn draw(p: &mut Pen, page: u8, style: u32, surfaces: u32, autostart: bool
         p.t("Giới thiệu", "About"),
     ];
     for (i, name) in pages.iter().enumerate() {
-        let r = (12.0, 84.0 + i as f32 * 42.0, NAV_W - 24.0, 36.0);
+        let r = (12.0, 78.0 + i as f32 * 38.0, NAV_W - 24.0, 36.0);
         let act = Act::Nav(i as u8);
         let on = page as usize == i;
         if on {
-            p.fill(r, 10.0, 0x26FFFFFF);
+            p.fill(r, 8.0, 0x1AFFFFFF);
         } else if p.hot(act) {
-            p.fill(r, 10.0, 0x14FFFFFF);
+            p.fill(r, 8.0, 0x0FFFFFFF);
         }
         p.icon((r.0 + 8.0, r.1, 28.0, r.3), NAV_ICONS[i], 16.0, if on { ACCENT } else { MUTED });
-        p.text((r.0 + 42.0, r.1, r.2 - 42.0, r.3), name, 13.5, false, if on { TEXT } else { MUTED }, 0);
+        p.text((r.0 + 42.0, r.1, r.2 - 42.0, r.3), name, 13.0, false, if on { TEXT } else { MUTED }, 0);
         p.hit(r, act);
     }
 
-    let close = (W - 44.0, 9.0, 30.0, 30.0);
+    let close = (W - 44.0, 8.0, 30.0, 30.0);
     if p.hot(Act::Close) {
         p.fill(close, 8.0, CARD_HOT);
     }
@@ -619,23 +696,9 @@ unsafe fn draw(p: &mut Pen, page: u8, style: u32, surfaces: u32, autostart: bool
     p.line((close.0 + 20.0, close.1 + 10.0), (close.0 + 10.0, close.1 + 20.0), MUTED, 1.4);
     p.hit(close, Act::Close);
 
-    let (title, hint) = match page {
-        0 => (p.t("Tổng quan", "Overview"), p.t("Tình trạng hiện tại của PuwBar. Bấm một thẻ để chỉnh phần đó.", "How PuwBar is set up now. Click a card to change that part.")),
-        1 => (p.t("Giao diện", "Look"), p.t("Chọn kiểu taskbar. Áp dụng ngay, không cần khởi động lại.", "Pick the taskbar style. It applies at once, no restart.")),
-        2 => (p.t("Bề mặt kính", "Glass surfaces"), p.t("Chọn các cửa sổ hệ thống được phủ kính.", "Choose which system windows get the glass.")),
-        3 => (p.t("Hệ thống", "System"), p.t("Cách PuwBar chạy trên máy này.", "How PuwBar runs on this PC.")),
-        _ => (p.t("Giới thiệu", "About"), p.t(concat!("Phiên bản ", env!("CARGO_PKG_VERSION")), concat!("Version ", env!("CARGO_PKG_VERSION")))),
-    };
-    p.text((CX, 58.0, CW, 32.0), title, 22.0, true, TEXT, 0);
-    p.text((CX, 90.0, CW, 22.0), hint, 12.5, false, MUTED, 0);
-
-    match page {
-        0 => page_overview(p, style, surfaces, autostart),
-        1 => page_look(p, style),
-        2 => page_surfaces(p, surfaces),
-        3 => page_system(p, autostart),
-        _ => page_about(p),
-    }
+    // Rim and the thin highlight along the top edge.
+    p.stroke((0.5, 0.5, W - 1.0, H - 1.0), RADIUS, 0x21FFFFFF, 1.0);
+    p.line((RADIUS, 1.0), (W - RADIUS, 1.0), 0x1AFFFFFF, 1.0);
 }
 
 /// A clickable card; registers its own hit area.
@@ -692,52 +755,55 @@ unsafe fn page_overview(p: &mut Pen, style: u32, surfaces: u32, autostart: bool)
 }
 
 unsafe fn page_look(p: &mut Pen, style: u32) {
-    let (cw, ch, gap) = ((CW - 12.0) / 2.0, 82.0, 12.0);
+    // Live preview: the chosen style on a stand-in wallpaper.
+    let stage = (CX, 128.0, CW, 150.0);
+    p.gradient(stage, 14.0, 0xFF4A7BD6, 0xFF8A5BD0);
+    p.stroke(stage, 14.0, LINE, 1.0);
+    pill_art(p, (stage.0 + (CW - 300.0) / 2.0, stage.1 + stage.3 - 62.0, 300.0, 44.0), style as usize, 6);
+
+    let (cw, ch, gap) = ((CW - 12.0) / 2.0, 118.0, 12.0);
     for (i, (vi, en, dvi, den)) in STYLES.iter().enumerate() {
         let (col, row) = ((i % 2) as f32, (i / 2) as f32);
-        let r = (CX + col * (cw + gap), 128.0 + row * (ch + gap), cw, ch);
+        let r = (CX + col * (cw + gap), 290.0 + row * (ch + gap), cw, ch);
         let act = Act::Style(i as u32);
         let on = style == i as u32;
-        p.fill(r, 14.0, if p.hot(act) { CARD_HOT } else { CARD });
-        p.stroke(r, 14.0, if on { ACCENT } else { LINE }, if on { 1.6 } else { 1.0 });
-        preview(p, (r.0 + 12.0, r.1 + 12.0, 64.0, ch - 24.0), i);
+        p.fill(r, 12.0, if on { ACCENT_SOFT } else if p.hot(act) { CARD_HOT } else { CARD });
+        p.stroke(r, 12.0, if on { ACCENT } else { LINE }, if on { 1.5 } else { 1.0 });
+        let thumb = (r.0 + 12.0, r.1 + 12.0, 64.0, 76.0);
+        p.gradient(thumb, 8.0, 0xFF4A7BD6, 0xFF8A5BD0);
+        pill_art(p, (thumb.0 + 5.0, thumb.1 + thumb.3 - 24.0, 54.0, 16.0), i, 3);
         let (name, desc) = if p.en { (en, den) } else { (vi, dvi) };
-        p.text((r.0 + 90.0, r.1 + 10.0, cw - 98.0, 24.0), name, 13.5, true, TEXT, 0);
-        p.text((r.0 + 90.0, r.1 + 36.0, cw - 100.0, 40.0), desc, 10.5, false, MUTED, 3);
-        if on {
-            p.circle(r.0 + cw - 16.0, r.1 + ch - 16.0, 8.0, ACCENT);
-            p.line((r.0 + cw - 20.0, r.1 + ch - 16.0), (r.0 + cw - 17.0, r.1 + ch - 13.0), 0xFFFFFFFF, 1.6);
-            p.line((r.0 + cw - 17.0, r.1 + ch - 13.0), (r.0 + cw - 12.0, r.1 + ch - 19.0), 0xFFFFFFFF, 1.6);
-        }
+        p.text((r.0 + 84.0, r.1 + 12.0, cw - 92.0, 20.0), name, 13.0, true, TEXT, 0);
+        p.text((r.0 + 84.0, r.1 + 36.0, cw - 92.0, 60.0), desc, 11.0, false, MUTED, 3);
         p.hit(r, act);
     }
 }
 
-/// Tiny schematic of a style: a wallpaper patch with a pill of three dots.
-unsafe fn preview(p: &Pen, r: R, style: usize) {
-    p.fill(r, 8.0, 0xFF3E6FB8);
-    p.fill((r.0, r.1 + r.3 * 0.5, r.2, r.3 * 0.5), 8.0, 0xFF6A4FA0);
-    let pill = (r.0 + 5.0, r.1 + r.3 - 24.0, r.2 - 10.0, 18.0);
+/// A taskbar pill in a given style with `n` app icons, drawn over whatever is behind it.
+unsafe fn pill_art(p: &Pen, pill: R, style: usize, n: usize) {
     match style {
         0 => {
-            p.fill(pill, 9.0, 0x55FFFFFF);
-            p.stroke(pill, 9.0, 0x77FFFFFF, 1.0);
+            p.fill(pill, pill.3 * 0.36, 0x40FFFFFF);
+            p.stroke(pill, pill.3 * 0.36, 0x77FFFFFF, 1.0);
         }
         1 => {
-            p.fill(pill, 9.0, 0x22FFFFFF);
-            p.stroke(pill, 9.0, 0xAAFFFFFF, 1.0);
+            p.fill(pill, pill.3 * 0.36, 0x1AFFFFFF);
+            p.stroke(pill, pill.3 * 0.36, 0xB3FFFFFF, 1.0);
         }
         3 => {
-            p.fill(pill, 9.0, 0x40101018);
-            p.stroke(pill, 9.0, 0x66FFFFFF, 0.7);
+            p.fill(pill, pill.3 * 0.36, 0x4D101018);
+            p.stroke(pill, pill.3 * 0.36, 0x66FFFFFF, 0.7);
         }
         _ => {}
     }
-    for i in 0..3 {
-        let cx = pill.0 + 14.0 + i as f32 * (pill.2 - 28.0) / 2.0;
-        p.circle(cx, pill.1 + 9.0, 4.0, 0xFFFFFFFF);
+    let s = pill.3 * 0.46;
+    let pad = pill.3 * 0.5;
+    let step = if n > 1 { (pill.2 - 2.0 * pad - s) / (n - 1) as f32 } else { 0.0 };
+    for i in 0..n {
+        let x = pill.0 + pad + i as f32 * step;
+        p.fill((x, pill.1 + (pill.3 - s) / 2.0, s, s), s * 0.3, 0xE6FFFFFF);
         if style == 2 {
-            p.circle(cx, pill.1 + 19.0, 3.0, 0x55FFFFFF);
+            p.fill((x, pill.1 + pill.3 + 2.0, s, s * 0.6), s * 0.3, 0x44FFFFFF);
         }
     }
 }
@@ -795,7 +861,7 @@ unsafe fn page_system(p: &mut Pen, autostart: bool) {
 
 unsafe fn page_about(p: &mut Pen) {
     let mid = CX + CW / 2.0;
-    logo(p, mid - 36.0, 124.0, 72.0);
+    logo(p, mid - 34.0, 124.0, 68.0);
     p.text((CX, 204.0, CW, 32.0), "PuwBar", 22.0, true, TEXT, 1);
     p.text((CX, 234.0, CW, 20.0), p.t(concat!("Phiên bản ", env!("CARGO_PKG_VERSION")), concat!("Version ", env!("CARGO_PKG_VERSION"))), 12.0, false, MUTED, 1);
 
