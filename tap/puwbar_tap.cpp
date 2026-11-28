@@ -2247,17 +2247,6 @@ private:
         CloseHandle(h);
     }
 
-    // Two seconds after a taskbar position change, so the replaced frame has settled, writes a snapshot of the trees
-    // PuwBar tracks to %TEMP%\puwbar_diag_move.txt (overwritten each time).
-    void DispatchDelayedDiag() {
-        AddRef();
-        std::thread([this]() {
-            Sleep(2000);
-            DispatchDiag(L"puwbar_diag_move.txt");
-            Release();
-        }).detach();
-    }
-
     void DispatchDiag(std::wstring fileName = L"puwbar_diag_tap.txt") {
         winrt::Windows::UI::Core::CoreDispatcher dispatcher{nullptr};
         {
@@ -2370,7 +2359,6 @@ private:
                         Sleep(120);
                         lastEdge = GetTaskbarEdge();
                         DispatchSyncAlignment();
-                        DispatchDelayedDiag();
                         if (stuckKey && posEv) {
                             RegNotifyChangeKeyValue(stuckKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, posEv, TRUE);
                         }
@@ -2380,7 +2368,6 @@ private:
                         if (cur != lastEdge) {
                             lastEdge = cur;
                             DispatchSyncAlignment();
-                            DispatchDelayedDiag();
                         }
                     }
                 }

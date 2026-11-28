@@ -481,43 +481,11 @@ unsafe fn for_each_taskbar(mut f: impl FnMut(HWND)) {
     }
 }
 
-/// Makes sure no native taskbar is left hidden (by a veil that was cut short, or a previous run).
+/// Makes sure no native taskbar is left hidden by a previous run.
 unsafe fn show_hidden_taskbars() {
     for_each_taskbar(|hwnd| {
         if IsWindowVisible(hwnd) == 0 {
             ShowWindow(hwnd, SW_SHOWNA);
-        }
-    });
-}
-
-/// Hides the native taskbar windows the moment they exist and keeps them hidden until the tap has
-/// restyled them (plus a short grace for the first elements), or `max_wait` passes. Without it, a
-/// logon or an Explorer restart shows the stock taskbar for a moment before PuwBar's glass replaces it.
-/// The caller must `ResetEvent` the tap-ready event first, or a stale signal ends the veil at once.
-fn spawn_taskbar_veil(max_wait: Duration) {
-    const GRACE: Duration = Duration::from_millis(600);
-    std::thread::spawn(move || unsafe {
-        const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
-        let ready = OpenEventW(SYNCHRONIZE_ACCESS, 0, wide(READY_EVENT_NAME).as_ptr());
-        let deadline = std::time::Instant::now() + max_wait;
-        let mut styled_at: Option<std::time::Instant> = None;
-        loop {
-            for_each_taskbar(|hwnd| {
-                if IsWindowVisible(hwnd) != 0 {
-                    ShowWindow(hwnd, SW_HIDE);
-                }
-            });
-            if styled_at.is_none() && !ready.is_null() && WaitForSingleObject(ready, 0) == WAIT_OBJECT_0 {
-                styled_at = Some(std::time::Instant::now());
-            }
-            if styled_at.is_some_and(|t| t.elapsed() >= GRACE) || std::time::Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        show_hidden_taskbars();
-        if !ready.is_null() {
-            CloseHandle(ready);
         }
     });
 }
@@ -881,44 +849,12 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     }
 }
 
-const POSITION_TIMER: usize = 10;
-/// How long after the taskbar changed edge its window is refreshed, so Explorer has finished moving it.
-const REFRESH_DELAY: Duration = Duration::from_millis(2500);
-
 thread_local! {
-    static TRAY_RECT: std::cell::Cell<(i32, i32, i32, i32)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
-    static REFRESH_AT: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
     static TASKBAR_CREATED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     static DLL_PATH: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
     static READY_HANDLE: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
     static RELOAD_HANDLE: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
     static TRAY_ICON_HANDLE: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
-}
-
-/// A white square appears at the start corner of the taskbar after it changes edge, and stays until the window is
-/// recomposed. When the taskbar window moves, hide and show it once after Explorer has settled.
-unsafe fn refresh_taskbar_after_move() {
-    let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null());
-    if tray.is_null() {
-        return;
-    }
-    let mut rc: RECT = std::mem::zeroed();
-    GetWindowRect(tray, &mut rc);
-    let now = (rc.left, rc.top, rc.right, rc.bottom);
-    let before = TRAY_RECT.with(|c| c.replace(now));
-    if before != (0, 0, 0, 0) && before != now {
-        REFRESH_AT.with(|c| c.set(Some(std::time::Instant::now() + REFRESH_DELAY)));
-        return;
-    }
-    let due = REFRESH_AT.with(|c| c.get()).is_some_and(|t| std::time::Instant::now() >= t);
-    if due {
-        REFRESH_AT.with(|c| c.set(None));
-        for_each_taskbar(|hwnd| {
-            ShowWindow(hwnd, SW_HIDE);
-        });
-        std::thread::sleep(Duration::from_millis(60));
-        show_hidden_taskbars();
-    }
 }
 
 unsafe extern "system" fn host_wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -940,10 +876,6 @@ unsafe extern "system" fn host_wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
             PostQuitMessage(0);
             return 0;
         }
-        WM_TIMER if w == POSITION_TIMER => {
-            refresh_taskbar_after_move();
-            return 0;
-        }
         WM_CLOSE | WM_ENDSESSION => {
             PostQuitMessage(0);
             return 0;
@@ -961,7 +893,6 @@ unsafe extern "system" fn host_wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         let ready = READY_HANDLE.with(|r| r.get()) as HANDLE;
         if let Some(dll) = dll {
             ResetEvent(ready);
-            spawn_taskbar_veil(Duration::from_secs(10));
             let _ = attach_tap_with_retry(&dll, ready, Duration::from_secs(10));
         }
         return 0;
@@ -1006,10 +937,9 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
             mutex,
         };
 
-        // Ensure native taskbars are visible if a previous run left them hidden, then veil them until styled.
+        // Ensure native taskbars are visible if a previous run left them hidden.
         show_hidden_taskbars();
         ResetEvent(ready_event);
-        spawn_taskbar_veil(Duration::from_secs(10));
 
         // Sync persisted enabled surfaces & taskbar style for both Explorer and AppContainer hosts before attaching.
         sync_glass_cfg_file(read_surfaces_mask(), read_taskbar_style());
@@ -1074,7 +1004,6 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
         if let Some(secs) = seconds {
             SetTimer(hwnd, 9, secs.clamp(1, 3600) * 1000, None);
         }
-        SetTimer(hwnd, POSITION_TIMER, 400, None);
 
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
