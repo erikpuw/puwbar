@@ -48,7 +48,7 @@ const RADIUS: f32 = 16.0;
 /// Screen y where the scrolling body starts, just under the title block.
 const BODY_TOP: f32 = 108.0;
 /// Bottom edge (page coordinates) of each page's content, in page order; a page scrolls only when it reaches past the window.
-const PAGE_BOTTOM: [f32; 5] = [422.0, 416.0, 464.0, 342.0, 494.0];
+const PAGE_BOTTOM: [f32; 5] = [422.0, 416.0, 464.0, 410.0, 494.0];
 
 fn max_scroll(page: u8) -> f32 {
     (PAGE_BOTTOM[(page as usize).min(PAGE_BOTTOM.len() - 1)] - (H - 12.0)).max(0.0)
@@ -82,6 +82,7 @@ enum Act {
     Close,
     Github,
     Donate,
+    Diagnose,
 }
 
 type R = (f32, f32, f32, f32);
@@ -359,6 +360,10 @@ unsafe fn run(hwnd: HWND, act: Act) {
             tap::apply_language(owner, en);
         }
         Act::Reapply => tap::reapply(),
+        // Waits for the tap in Explorer, so it runs off the window's thread.
+        Act::Diagnose => {
+            std::thread::spawn(crate::diag::run_and_report);
+        }
         Act::Github => {
             ShellExecuteW(null_mut(), wide("open").as_ptr(), wide("https://github.com/erikpuw/puwbar").as_ptr(), null(), null(), SW_SHOWNORMAL);
         }
@@ -904,11 +909,18 @@ unsafe fn page_system(p: &mut Pen, autostart: bool) {
         p.hit(r, act);
     }
 
+    let diag = (CX, 262.0, CW, 56.0);
+    p.fill(diag, 12.0, CARD);
+    p.text((diag.0 + 16.0, diag.1 + 8.0, diag.2 - 150.0, 20.0), p.t("Xuất chẩn đoán", "Export diagnostics"), 13.5, false, TEXT, 0);
+    p.text((diag.0 + 16.0, diag.1 + 29.0, diag.2 - 150.0, 18.0), p.t("Ghi thông tin taskbar vào file cạnh puwbar.exe.", "Writes taskbar details to a file next to puwbar.exe."), 11.0, false, MUTED, 0);
+    let label = p.t("Xuất", "Export");
+    p.button((diag.0 + diag.2 - 108.0, diag.1 + 13.0, 92.0, 30.0), label, Act::Diagnose, false);
+
     let label = p.t("Áp dụng lại giao diện", "Reapply taskbar glass");
-    p.button((CX, 270.0, 220.0, 38.0), label, Act::Reapply, false);
+    p.button((CX, 338.0, 220.0, 38.0), label, Act::Reapply, false);
     let label = p.t("Thoát PuwBar", "Exit PuwBar");
-    p.button((CX + 232.0, 270.0, 170.0, 38.0), label, Act::Exit, true);
-    p.text((CX, 320.0, CW, 22.0), p.t("Phím tắt thoát nhanh: Ctrl+Alt+F12", "Quick exit shortcut: Ctrl+Alt+F12"), 11.5, false, MUTED, 0);
+    p.button((CX + 232.0, 338.0, 170.0, 38.0), label, Act::Exit, true);
+    p.text((CX, 388.0, CW, 22.0), p.t("Phím tắt thoát nhanh: Ctrl+Alt+F12", "Quick exit shortcut: Ctrl+Alt+F12"), 11.5, false, MUTED, 0);
 }
 
 unsafe fn page_about(p: &mut Pen) {

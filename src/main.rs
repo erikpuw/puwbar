@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod desktop;
+mod diag;
 mod gfx;
 mod glass;
 mod settings;

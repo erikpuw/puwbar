@@ -2029,6 +2029,107 @@ private:
         }
     }
 
+    static std::string Utf8(std::wstring const& w) {
+        if (w.empty()) return {};
+        int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+        std::string out(static_cast<size_t>(n), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), n, nullptr, nullptr);
+        return out;
+    }
+
+    // One line per visual-tree node: class, name, size, position inside the taskbar window, margin, alignment, visibility.
+    static void DumpNode(xaml::DependencyObject const& node, xaml::UIElement const& root, int depth, int& budget, std::string& out) {
+        if (!node || depth > 40 || budget <= 0) return;
+        --budget;
+        try {
+            std::string line(static_cast<size_t>(depth) * 2, ' ');
+            line += Utf8(std::wstring(winrt::get_class_name(node)));
+            if (auto fe = node.try_as<xaml::FrameworkElement>()) {
+                auto nm = fe.Name();
+                if (!nm.empty()) line += "#" + Utf8(std::wstring(nm));
+                float x = 0.0f, y = 0.0f;
+                try {
+                    auto pt = fe.TransformToVisual(root).TransformPoint(winrt::Windows::Foundation::Point{0.0f, 0.0f});
+                    x = pt.X;
+                    y = pt.Y;
+                } catch (...) {
+                }
+                auto m = fe.Margin();
+                char buf[320];
+                snprintf(buf, sizeof(buf), "  size=%.1fx%.1f at=(%.1f,%.1f) margin=(%.1f,%.1f,%.1f,%.1f) halign=%d valign=%d visibility=%d",
+                    fe.ActualWidth(), fe.ActualHeight(), x, y, m.Left, m.Top, m.Right, m.Bottom,
+                    static_cast<int>(fe.HorizontalAlignment()), static_cast<int>(fe.VerticalAlignment()), static_cast<int>(fe.Visibility()));
+                line += buf;
+            }
+            out += line;
+            out += "\n";
+        } catch (...) {
+        }
+        int count = media::VisualTreeHelper::GetChildrenCount(node);
+        for (int i = 0; i < count; ++i) {
+            DumpNode(media::VisualTreeHelper::GetChild(node, i), root, depth + 1, budget, out);
+        }
+    }
+
+    // Writes the taskbar's XAML tree to %TEMP%\puwbar_diag_tap.txt for puwbar.exe to fold into its report.
+    void DumpTreeOnUiThread() {
+        std::vector<xaml::DependencyObject> frames;
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            for (auto& t : m_tracked) {
+                if (t.type == L"Taskbar.TaskbarFrame") {
+                    if (auto obj = t.target.get()) frames.push_back(obj);
+                }
+            }
+        }
+        std::string out = "XAML tree of the taskbar (Explorer), " + std::to_string(frames.size()) + " taskbar frame(s)\n";
+        int index = 0;
+        for (auto& frame : frames) {
+            xaml::UIElement root{nullptr};
+            try {
+                xaml::DependencyObject cur = frame;
+                while (cur) {
+                    if (auto ui = cur.try_as<xaml::UIElement>()) root = ui;
+                    cur = media::VisualTreeHelper::GetParent(cur);
+                }
+            } catch (...) {
+            }
+            out += "\n--- frame " + std::to_string(index++) + " ---\n";
+            int budget = 4000;
+            if (root) DumpNode(root, root, 0, budget, out);
+        }
+        wchar_t tmp[MAX_PATH]{};
+        DWORD len = GetTempPathW(MAX_PATH, tmp);
+        if (len == 0 || len >= MAX_PATH) return;
+        std::wstring path = std::wstring(tmp, len) + L"puwbar_diag_tap.txt";
+        HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE) return;
+        DWORD written = 0;
+        WriteFile(h, out.data(), static_cast<DWORD>(out.size()), &written, nullptr);
+        CloseHandle(h);
+    }
+
+    void DispatchDiag() {
+        winrt::Windows::UI::Core::CoreDispatcher dispatcher{nullptr};
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            dispatcher = m_dispatcher;
+        }
+        if (dispatcher) {
+            try {
+                AddRef();
+                dispatcher.RunAsync(
+                    winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
+                    [this]() {
+                        DumpTreeOnUiThread();
+                        Release();
+                    });
+            } catch (...) {
+                Release();
+            }
+        }
+    }
+
     void StartWatcher() {
         StopWatcher();
         m_stopWatcher.store(false);
@@ -2061,6 +2162,7 @@ private:
         m_watcher = std::thread([this]() {
             HANDLE stopEv = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\PuwBar.StopEvent");
             HANDLE reloadEv = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\PuwBar.ReloadEvent");
+            HANDLE diagEv = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\PuwBar.DiagEvent");
             HANDLE alignEv = CreateEventW(nullptr, FALSE, FALSE, nullptr);
             HKEY advKey = nullptr;
             bool watchingReg = false;
@@ -2073,11 +2175,12 @@ private:
                 watchingReg = (RegNotifyChangeKeyValue(advKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, alignEv, TRUE) == ERROR_SUCCESS);
             }
 
-            HANDLE handles[4]{};
-            int stopIdx = -1, reloadIdx = -1, alignIdx = -1, posIdx = -1;
+            HANDLE handles[5]{};
+            int stopIdx = -1, reloadIdx = -1, alignIdx = -1, posIdx = -1, diagIdx = -1;
             DWORD count = 0;
             if (stopEv) { stopIdx = static_cast<int>(count); handles[count++] = stopEv; }
             if (reloadEv) { reloadIdx = static_cast<int>(count); handles[count++] = reloadEv; }
+            if (diagEv) { diagIdx = static_cast<int>(count); handles[count++] = diagEv; }
             if (watchingReg) { alignIdx = static_cast<int>(count); handles[count++] = alignEv; }
 
             HANDLE posEv = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -2104,6 +2207,9 @@ private:
                     }
                     if (reloadIdx >= 0 && wait == WAIT_OBJECT_0 + static_cast<DWORD>(reloadIdx)) {
                         DispatchReload();
+                    }
+                    if (diagIdx >= 0 && wait == WAIT_OBJECT_0 + static_cast<DWORD>(diagIdx)) {
+                        DispatchDiag();
                     }
                     if (alignIdx >= 0 && wait == WAIT_OBJECT_0 + static_cast<DWORD>(alignIdx)) {
                         DispatchSyncAlignment();
@@ -2134,6 +2240,7 @@ private:
             if (alignEv) CloseHandle(alignEv);
             if (stopEv) CloseHandle(stopEv);
             if (reloadEv) CloseHandle(reloadEv);
+            if (diagEv) CloseHandle(diagEv);
             Release();
         });
     }
