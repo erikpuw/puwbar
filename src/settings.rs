@@ -533,7 +533,7 @@ unsafe fn paint(hwnd: HWND) {
         let mut g = null_mut();
         gp::GdipCreateFromHDC(mem, &mut g);
         gp::GdipSetSmoothingMode(g, gp::SmoothingModeAntiAlias);
-        gp::GdipSetTextRenderingHint(g, gp::TextRenderingHintAntiAlias);
+        gp::GdipSetTextRenderingHint(g, gp::TextRenderingHintAntiAliasGridFit);
         let mut fam = null_mut();
         gp::GdipCreateFontFamilyFromName(wide("Segoe UI").as_ptr(), null_mut(), &mut fam);
         let mut dfam = null_mut();
