@@ -46,7 +46,7 @@ const RADIUS: f32 = 16.0;
 /// Screen y where the scrolling body starts, just under the title block.
 const BODY_TOP: f32 = 108.0;
 /// How far the Look page scrolls (stage + five style cards are taller than the window).
-const LOOK_SCROLL: f32 = 120.0;
+const LOOK_SCROLL: f32 = 30.0;
 const PAD: f32 = 30.0;
 const CX: f32 = NAV_W + PAD;
 const CW: f32 = W - CX - PAD;
@@ -709,7 +709,7 @@ unsafe fn page_look(p: &mut Pen, style: u32) {
     p.stroke(stage, 14.0, LINE, 1.0);
     pill_art(p, (stage.0 + (CW - 300.0) / 2.0, stage.1 + stage.3 - 62.0, 300.0, 44.0), style as usize, 6);
 
-    let (cw, ch, gap) = ((CW - 12.0) / 2.0, 118.0, 12.0);
+    let (cw, ch, gap) = ((CW - 12.0) / 2.0, 88.0, 12.0);
     for (i, (vi, en, dvi, den)) in STYLES.iter().enumerate() {
         let (col, row) = ((i % 2) as f32, (i / 2) as f32);
         let r = (CX + col * (cw + gap), 290.0 + row * (ch + gap), cw, ch);
@@ -721,8 +721,8 @@ unsafe fn page_look(p: &mut Pen, style: u32) {
         p.gradient(thumb, 8.0, 0xFF4A7BD6, 0xFF8A5BD0);
         pill_art(p, (thumb.0 + 5.0, thumb.1 + thumb.3 - 24.0, 54.0, 16.0), i, 3);
         let (name, desc) = if p.en { (en, den) } else { (vi, dvi) };
-        p.text((r.0 + 84.0, r.1 + 28.0, cw - 92.0, 20.0), name, 13.0, true, TEXT, 0);
-        p.text((r.0 + 84.0, r.1 + 52.0, cw - 92.0, 40.0), desc, 11.0, false, MUTED, 3);
+        p.text((r.0 + 84.0, r.1 + 13.0, cw - 92.0, 20.0), name, 13.0, true, TEXT, 0);
+        p.text((r.0 + 84.0, r.1 + 37.0, cw - 92.0, 40.0), desc, 11.0, false, MUTED, 3);
         p.hit(r, act);
     }
 }
