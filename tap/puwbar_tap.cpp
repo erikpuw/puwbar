@@ -989,23 +989,22 @@ private:
         }
     }
 
-    // Records the current original value once per (object, property, orientation) before overwriting,
-    // so properties first touched after an edge change (e.g. Height when moving to vertical, Width when
-    // moving to horizontal) are always tracked and restored on exit.
+    // Records the original Explorer value at most once per (object, property), regardless of orientation.
+    // Checking across all orientations prevents a later edge switch from mistaking PuwBar's own previous
+    // override (e.g. horizontal Margin(250,0,250,0)) for an Explorer original; properties first touched after
+    // an edge change (e.g. Height when moving to vertical) are still captured once and restored on exit.
     void SaveOnceAndSet(
         xaml::DependencyObject const& obj,
         xaml::DependencyProperty const& prop,
         winrt::Windows::Foundation::IInspectable const& value) {
         try {
-            TaskbarEdge edge = GetTaskbarEdge();
-            bool vertical = (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right);
             bool alreadySaved = false;
             void* objAbi = winrt::get_abi(obj);
             void* propAbi = winrt::get_abi(prop);
             {
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 for (auto const& s : m_saved) {
-                    if (s.vertical == vertical && winrt::get_abi(s.prop) == propAbi) {
+                    if (winrt::get_abi(s.prop) == propAbi) {
                         if (auto existing = s.target.get()) {
                             if (winrt::get_abi(existing) == objAbi) {
                                 alreadySaved = true;
@@ -1613,6 +1612,7 @@ private:
                 SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
                 SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
                 SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
+                SoftenFlyoutShadow(obj, 0.0f);
             }
             return;
         }
@@ -1789,6 +1789,44 @@ private:
 
         if (name == L"IconPanel") {
             ApplyLayoutProps(obj, type, name, parentType, true);
+            // Explorer resets IconPanel back to 48px / Stretch when switching VisualStates on vertical taskbars,
+            // shifting idle app icons 3px right of Start until hovered. Lock both properties while vertical.
+            try {
+                auto widthToken = obj.RegisterPropertyChangedCallback(
+                    xaml::FrameworkElement::WidthProperty(),
+                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
+                        try {
+                            TaskbarEdge edge = GetTaskbarEdge();
+                            if (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right) {
+                                double cur = winrt::unbox_value_or<double>(
+                                    sender.GetValue(dp), std::numeric_limits<double>::quiet_NaN());
+                                if (!(cur == 40.0)) {
+                                    sender.SetValue(dp, winrt::box_value(40.0));
+                                }
+                            }
+                        } catch (...) {
+                        }
+                    });
+                auto alignToken = obj.RegisterPropertyChangedCallback(
+                    xaml::FrameworkElement::HorizontalAlignmentProperty(),
+                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
+                        try {
+                            TaskbarEdge edge = GetTaskbarEdge();
+                            if (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right) {
+                                auto cur = winrt::unbox_value_or<xaml::HorizontalAlignment>(
+                                    sender.GetValue(dp), xaml::HorizontalAlignment::Stretch);
+                                if (cur != xaml::HorizontalAlignment::Center) {
+                                    sender.SetValue(dp, winrt::box_value(xaml::HorizontalAlignment::Center));
+                                }
+                            }
+                        } catch (...) {
+                        }
+                    });
+                std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                m_propCallbacks.push_back({winrt::make_weak(obj), xaml::FrameworkElement::WidthProperty(), widthToken});
+                m_propCallbacks.push_back({winrt::make_weak(obj), xaml::FrameworkElement::HorizontalAlignmentProperty(), alignToken});
+            } catch (...) {
+            }
             return;
         }
 
