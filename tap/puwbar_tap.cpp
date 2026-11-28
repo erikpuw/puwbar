@@ -131,6 +131,9 @@ struct SavedProp {
     xaml::DependencyProperty prop{nullptr};
     winrt::Windows::Foundation::IInspectable original{nullptr};
     bool wasUnset = false;
+    // Whether the taskbar was vertical when the original was recorded. Explorer re-sets the frame's layout properties
+    // itself when the taskbar changes between vertical and horizontal, so an original from the other orientation is stale.
+    bool vertical = false;
 };
 
 struct SavedPropCallback {
@@ -970,6 +973,10 @@ private:
             saved.target = winrt::make_weak(obj);
             saved.prop = prop;
             saved.wasUnset = (local == xaml::DependencyProperty::UnsetValue());
+            {
+                TaskbarEdge edge = GetTaskbarEdge();
+                saved.vertical = (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right);
+            }
             if (!saved.wasUnset) {
                 saved.original = local;
             }
@@ -1619,7 +1626,7 @@ private:
             SaveAndSet(obj, controls::Border::CornerRadiusProperty(), winrt::box_value(xaml::CornerRadius{12.0, 12.0, 12.0, 12.0}));
             SaveAndSet(obj, controls::Border::BorderBrushProperty(), MakePuwBorder());
             SaveAndSet(obj, controls::Border::BorderThicknessProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
-            SoftenFlyoutShadow(obj);
+            SoftenFlyoutShadow(obj, 0.0f);
             return;
         }
 
@@ -1829,11 +1836,12 @@ private:
     // Native shell flyouts cast a deep ThemeShadow (Z ~32-64) that is clipped flat by the flyout
     // host window at the taskbar edge; behind see-through glass that clip reads as a hard cut line.
     // Cap the Z of the nearest shadow-casting ancestor so the shadow stays inside the host window.
-    void SoftenFlyoutShadow(xaml::DependencyObject const& obj) {
+    // `maxZ` is the highest elevation left: 16 is soft enough to read as a shadow and low enough that its blur stays above
+    // the taskbar edge; the overflow flyout hugs its host window, so it gets 0 (any shadow there shows as a flat strip).
+    void SoftenFlyoutShadow(xaml::DependencyObject const& obj, float maxZ = 16.0f) {
         // Some hosts (e.g. Start's #StartDropShadow) cast the shadow from a sibling, so each
         // ancestor's direct children are checked too.
-        // Soft enough to read as a shadow, low enough that its blur stays above the taskbar edge.
-        constexpr float kMaxFlyoutShadowZ = 16.0f;
+        const float kMaxFlyoutShadowZ = maxZ;
         auto cap = [&](xaml::DependencyObject const& o) {
             auto el = o.try_as<xaml::UIElement>();
             if (!el || !el.Shadow()) return;
@@ -1858,6 +1866,20 @@ private:
                 return;
             }
         }
+    }
+
+    // Layout properties that Explorer assigns afresh when the taskbar changes between vertical and horizontal.
+    static bool IsOrientationLayoutProperty(xaml::DependencyProperty const& p) {
+        return p == xaml::FrameworkElement::WidthProperty()
+            || p == xaml::FrameworkElement::HeightProperty()
+            || p == xaml::FrameworkElement::MaxWidthProperty()
+            || p == xaml::FrameworkElement::MarginProperty()
+            || p == xaml::FrameworkElement::HorizontalAlignmentProperty()
+            || p == xaml::FrameworkElement::VerticalAlignmentProperty()
+            || p == xaml::UIElement::RenderTransformProperty()
+            || p == controls::Grid::PaddingProperty()
+            || p == controls::Control::PaddingProperty()
+            || p == controls::StackPanel::PaddingProperty();
     }
 
     void RestoreAllOnUiThread() {
@@ -1950,12 +1972,16 @@ private:
             } catch (...) {
             }
         }
+        TaskbarEdge nowEdge = GetTaskbarEdge();
+        bool nowVertical = (nowEdge == TaskbarEdge::Left || nowEdge == TaskbarEdge::Right);
         for (auto it = items.rbegin(); it != items.rend(); ++it) {
             try {
                 if (auto obj = it->target.get()) {
                     auto prop = it->prop;
                     auto original = it->original;
-                    bool wasUnset = it->wasUnset;
+                    // The orientation changed since this was saved: the recorded layout value belongs to the other
+                    // orientation and would overwrite what Explorer set for this one (the taskbar then stays blank).
+                    bool wasUnset = it->wasUnset || (it->vertical != nowVertical && IsOrientationLayoutProperty(prop));
                     RunOnObjectThread(obj, [obj, prop, original, wasUnset]() {
                         if (wasUnset) {
                             obj.ClearValue(prop);
