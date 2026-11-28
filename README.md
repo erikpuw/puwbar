@@ -63,6 +63,8 @@ Chọn trong bảng cài đặt (bấm chuột trái vào icon ở khay).
 
 **Trong suốt hoàn toàn**: không nền, không viền, không mờ, không bóng. Chỉ còn icon nổi trên hình nền.
 
+![Kiểu Trong suốt hoàn toàn](assets/screenshots/style-clear.png)
+
 ## Cài đặt và dùng
 
 1. Nếu đang chạy bản PuwBar cũ, hãy thoát trước khi cài (`Ctrl+Alt+F12` hoặc chọn **Thoát PuwBar** ở System Tray).

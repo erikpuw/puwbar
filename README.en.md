@@ -63,6 +63,8 @@ Pick one in the settings window (left-click the tray icon).
 
 **Fully transparent**: no fill, no rim, no blur, no shadow. Only the icons float over the wallpaper.
 
+![Fully transparent style](assets/screenshots/style-clear.png)
+
 ## Install & usage
 
 1. If an older copy of PuwBar is currently running, exit it first (`Ctrl+Alt+F12` or **Exit PuwBar** in the System Tray).
