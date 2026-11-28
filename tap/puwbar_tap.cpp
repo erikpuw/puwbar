@@ -2013,14 +2013,18 @@ private:
         bool nowVertical = (nowEdge == TaskbarEdge::Left || nowEdge == TaskbarEdge::Right);
         bool orientationSwitched = m_orientationSwitched.load();
         // Pass 1: if the taskbar ever switched orientation while PuwBar was running (or a layout property was
-        // recorded in the other orientation), clear all orientation layout overrides so no stale PuwBar value
-        // or mid-transition Explorer dimension (e.g. horizontal Height=48 captured during a switch to vertical)
-        // is ever re-applied.
+        // recorded in the other orientation), clear orientation layout overrides EXCEPT TaskbarFrame's
+        // Width/Height (clearing Width on a vertical TaskbarFrame wipes Explorer's native Width=48 and
+        // collapses TaskbarFrame to 0x0 until Explorer restarts; TaskbarFrame is explicitly reset in Pass 3).
         for (auto it = items.rbegin(); it != items.rend(); ++it) {
             if (!IsOrientationLayoutProperty(it->prop)) continue;
             if (!orientationSwitched && it->vertical == nowVertical) continue;
             try {
                 if (auto obj = it->target.get()) {
+                    bool isFrameSize = (winrt::get_class_name(obj) == L"Taskbar.TaskbarFrame")
+                        && (it->prop == xaml::FrameworkElement::WidthProperty()
+                            || it->prop == xaml::FrameworkElement::HeightProperty());
+                    if (isFrameSize) continue;
                     auto prop = it->prop;
                     RunOnObjectThread(obj, [obj, prop]() {
                         obj.ClearValue(prop);
@@ -2048,8 +2052,20 @@ private:
             } catch (...) {
             }
         }
-        // Pass 3: force a full measure/arrange pass on the taskbar frames, their parent host, and newly un-collapsed
-        // BackgroundControl so Windows immediately repaints the native taskbar at the current orientation's dimensions.
+        // Pass 3: when orientation switched, restore TaskbarFrame to the exact Shell_TrayWnd dimensions in XAML
+        // pixels (Stretch/Stretch, Margin=0, no RenderTransform) and force a full measure/arrange pass.
+        double trayW = 0.0;
+        double trayH = 0.0;
+        if (HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr)) {
+            RECT rc{};
+            if (GetWindowRect(tray, &rc)) {
+                double scale = static_cast<double>(GetDpiForWindow(tray)) / 96.0;
+                if (scale > 0.0) {
+                    trayW = static_cast<double>(rc.right - rc.left) / scale;
+                    trayH = static_cast<double>(rc.bottom - rc.top) / scale;
+                }
+            }
+        }
         std::vector<TrackedElement> layoutTargets;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -2066,7 +2082,27 @@ private:
             try {
                 if (auto obj = t.target.get()) {
                     bool isFrame = (t.type == L"Taskbar.TaskbarFrame");
-                    RunOnObjectThread(obj, [obj, isFrame]() {
+                    RunOnObjectThread(obj, [obj, isFrame, orientationSwitched, trayW, trayH]() {
+                        if (isFrame && orientationSwitched) {
+                            try {
+                                if (trayW > 0.0) {
+                                    obj.SetValue(xaml::FrameworkElement::WidthProperty(), winrt::box_value(trayW));
+                                }
+                                if (trayH > 0.0) {
+                                    obj.SetValue(xaml::FrameworkElement::HeightProperty(), winrt::box_value(trayH));
+                                }
+                                obj.SetValue(
+                                    xaml::FrameworkElement::HorizontalAlignmentProperty(),
+                                    winrt::box_value(xaml::HorizontalAlignment::Stretch));
+                                obj.SetValue(
+                                    xaml::FrameworkElement::VerticalAlignmentProperty(),
+                                    winrt::box_value(xaml::VerticalAlignment::Stretch));
+                                obj.SetValue(
+                                    xaml::FrameworkElement::MarginProperty(),
+                                    winrt::box_value(xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
+                                obj.ClearValue(xaml::UIElement::RenderTransformProperty());
+                            } catch (...) {}
+                        }
                         if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
                             try {
                                 fe.InvalidateMeasure();
