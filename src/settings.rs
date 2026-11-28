@@ -18,14 +18,14 @@ use windows_numerics::{Matrix3x2, Vector2};
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::{
-        Dwm::DwmSetWindowAttribute,
+        Dwm::{DwmEnableBlurBehindWindow, DwmSetWindowAttribute, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND},
         Gdi::{
             CreateCompatibleDC, CreateRoundRectRgn, DeleteDC, DeleteObject, GetDIBits, GetMonitorInfoW, InvalidateRect,
             MonitorFromPoint, ScreenToClient, SetWindowRgn, ValidateRect, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
             MONITORINFO, MONITOR_DEFAULTTONEAREST,
         },
     },
-    System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
+    System::LibraryLoader::GetModuleHandleW,
     UI::{
         Controls::WM_MOUSELEAVE,
         HiDpi::{
@@ -157,9 +157,13 @@ pub fn open(owner: HWND) {
         // Dark frame (DWMWA_USE_IMMERSIVE_DARK_MODE = 20) on a transient acrylic backdrop (DWMWA_SYSTEMBACKDROP_TYPE = 38, 3).
         let on: i32 = 1;
         DwmSetWindowAttribute(hwnd, 20, (&on as *const i32).cast(), 4);
-        blur_behind(hwnd);
         let corner = (RADIUS * 2.0 * k) as i32;
         SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, corner, corner), 1);
+        // Blur of the desktop behind, limited to the same rounded shape (the accent-policy blur ignores the region).
+        let blur_rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, corner, corner);
+        let blur = DWM_BLURBEHIND { dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION, fEnable: 1, hRgnBlur: blur_rgn, fTransitionOnMaximized: 0 };
+        DwmEnableBlurBehindWindow(hwnd, &blur);
+        DeleteObject(blur_rgn);
         let gfx = match Gfx::new(windows::Win32::Foundation::HWND(hwnd as _), w, h, icon_pixels()) {
             Ok(g) => g,
             Err(_) => {
@@ -186,33 +190,6 @@ pub fn open(owner: HWND) {
         render(hwnd);
         SetThreadDpiAwarenessContext(old);
     }
-}
-
-/// Acrylic blur of everything behind the window (the undocumented accent policy that shell flyouts use).
-unsafe fn blur_behind(hwnd: HWND) {
-    #[repr(C)]
-    struct AccentPolicy {
-        state: u32,
-        flags: u32,
-        color: u32,
-        anim: u32,
-    }
-    #[repr(C)]
-    struct CompAttr {
-        attr: u32,
-        data: *mut std::ffi::c_void,
-        size: u32,
-    }
-    type SetWca = unsafe extern "system" fn(HWND, *mut CompAttr) -> i32;
-    let user32 = GetModuleHandleW(wide("user32.dll").as_ptr());
-    let Some(f) = GetProcAddress(user32, c"SetWindowCompositionAttribute".as_ptr().cast()) else {
-        return;
-    };
-    let set: SetWca = std::mem::transmute(f);
-    // State 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND; colour is AABBGGRR, almost no tint, the veil is painted by the window itself.
-    let mut policy = AccentPolicy { state: 4, flags: 2, color: 0x01130F0E, anim: 0 };
-    let mut data = CompAttr { attr: 19, data: (&mut policy as *mut AccentPolicy).cast(), size: std::mem::size_of::<AccentPolicy>() as u32 };
-    set(hwnd, &mut data);
 }
 
 fn xy(l: LPARAM, k: f32) -> (f32, f32) {
@@ -596,8 +573,11 @@ unsafe fn logo(p: &Pen, x: f32, y: f32, s: f32) {
 }
 
 unsafe fn draw(p: &mut Pen, page: u8, scroll: f32, style: u32, surfaces: u32, autostart: bool) {
-    p.fill((0.0, 0.0, W, H), 0.0, BG);
-    p.fill((0.0, 0.0, NAV_W, H), 0.0, NAV);
+    // Both fills follow the window's rounded shape; a square fill would stick out at the corners.
+    p.fill((0.0, 0.0, W, H), RADIUS, BG);
+    p.g.rt.PushAxisAlignedClip(&rc((0.0, 0.0, NAV_W, H)), D2D1_ANTIALIAS_MODE_ALIASED);
+    p.fill((0.0, 0.0, NAV_W + RADIUS * 2.0, H), RADIUS, NAV);
+    p.g.rt.PopAxisAlignedClip();
     p.line((NAV_W, 0.0), (NAV_W, H), LINE, 1.0);
 
     // Page content: shifted up a little (the title sits near y 44) and by the scroll offset, clipped to the content area.
