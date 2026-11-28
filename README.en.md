@@ -19,7 +19,7 @@
 
 | Feature | What it does |
 |---|---|
-| **Real frosted glass** | Real-time blur of whatever is behind the bar, a glass rim that catches the light, a soft shadow, and 12px rounded corners. Four styles to choose from. The glass darkens on its own over bright wallpapers so text stays readable, with nothing to tune. |
+| **Real frosted glass** | Real-time blur of whatever is behind the bar, a glass rim that catches the light, a soft shadow, and 12px rounded corners. Five styles to choose from. The glass darkens on its own over bright wallpapers so text stays readable, with nothing to tune. |
 | **Native behavior intact** | Never hides or replaces Explorer. Keeps live tray animations (RunCat 365, UniKey), native right-click menus, the overflow icon grid, Start menu, and window previews. |
 | **All 4 edges & Left/Center** | Adapts live when switching taskbar position (**Bottom / Top / Left / Right**) or alignment (**Left / Center**) in Windows Settings. |
 | **Right-edge indicator fix** | Keeps the running-app indicator locked to the right edge on vertical right-docked taskbars. |
@@ -38,7 +38,8 @@
 | ![Start Menu and Taskbar glass](assets/screenshots/start-menu.jpg)<br>**Start Menu & Taskbar**: 12px rounded frosted glass with subtle hairline border | ![Control Center and System Tray](assets/screenshots/control-center.jpg)<br>**Control Center & System Tray**: matching glass layer across both surfaces |
 | ![Notifications and Calendar](assets/screenshots/notifications-calendar.jpg)<br>**Notifications & Calendar**: white text stays readable over bright areas | ![Taskbar Jump List](assets/screenshots/jump-list.jpg)<br>**Jump List**: right-click menu on taskbar app icons |
 | ![Start button Win+X menu](assets/screenshots/start-context-menu.jpg)<br>**Win+X Menu**: Start button context menu | ![System Tray context menu](assets/screenshots/tray-context-menu.png)<br>**System Tray Menu**: native left-click selection preserved |
-| ![PuwBar tray menu English](assets/screenshots/tray-en.png)<br>**PuwBar Menu (English)**: taskbar styles & per-surface toggles | ![PuwBar tray menu Vietnamese](assets/screenshots/tray-vi.png)<br>**PuwBar Menu (Vietnamese)**: switch language directly from the tray |
+| ![PuwBar Settings English](assets/screenshots/settings-en.jpg)<br>**PuwBar Settings (English)**: pick styles, glass surfaces, startup, and language | ![PuwBar Settings Vietnamese](assets/screenshots/settings-vi.jpg)<br>**PuwBar Settings (Vietnamese)**: full bilingual Vietnamese and English UI |
+| ![PuwBar tray menu English](assets/screenshots/tray-en.png)<br>**Tray right-click menu (English)**: quick access to Settings, About, and Exit | ![PuwBar tray menu Vietnamese](assets/screenshots/tray-vi.png)<br>**Tray right-click menu (Vietnamese)**: compact 3-item menu |
 
 ### Taskbar styles
 

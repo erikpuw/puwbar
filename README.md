@@ -19,7 +19,7 @@
 
 | Tính năng | Làm gì |
 |---|---|
-| **Kính mờ thật** | Làm mờ nền phía sau theo thời gian thực, viền kính bắt sáng, bóng đổ nhẹ và bo góc 12px. Có bốn kiểu giao diện để chọn. Kính tự tối thêm khi nền sáng để chữ luôn dễ đọc, không cần chỉnh tay. |
+| **Kính mờ thật** | Làm mờ nền phía sau theo thời gian thực, viền kính bắt sáng, bóng đổ nhẹ và bo góc 12px. Có năm kiểu giao diện để chọn. Kính tự tối thêm khi nền sáng để chữ luôn dễ đọc, không cần chỉnh tay. |
 | **Giữ nguyên bản gốc** | Không ẩn hay thay thế Explorer. Giữ đủ animation tray (RunCat 365, UniKey), menu chuột phải gốc, lưới icon overflow, Start menu và xem trước cửa sổ. |
 | **Đủ 4 cạnh & Left/Center** | Tự xoay bố cục theo thời gian thực khi đổi vị trí taskbar (**Bottom / Top / Left / Right**) hoặc căn lề (**Left / Center**) trong Windows Settings. |
 | **Sửa vạch cạnh phải** | Khóa đúng vạch đánh dấu ứng dụng đang chạy về cạnh phải khi đặt taskbar dọc bên phải màn hình. |
@@ -38,7 +38,8 @@
 | ![Start Menu và Taskbar kính mờ](assets/screenshots/start-menu.jpg)<br>**Start Menu & Taskbar**: kính mờ nổi bo góc 12px, viền trắng mảnh | ![Quick Settings và System Tray](assets/screenshots/control-center.jpg)<br>**Control Center & System Tray**: đồng bộ cùng một lớp kính mờ |
 | ![Thông báo và Lịch](assets/screenshots/notifications-calendar.jpg)<br>**Thông báo & Lịch**: đọc rõ chữ trắng cả trên nền sáng | ![Jump List chuột phải ứng dụng](assets/screenshots/jump-list.jpg)<br>**Jump List**: menu chuột phải trên biểu tượng ứng dụng |
 | ![Menu chuột phải nút Start](assets/screenshots/start-context-menu.jpg)<br>**Menu Win+X**: menu chuột phải nút Start | ![Menu chuột phải System Tray](assets/screenshots/tray-context-menu.png)<br>**Menu System Tray**: giữ nguyên bấm chọn chuột trái bình thường |
-| ![Menu tray Tiếng Việt](assets/screenshots/tray-vi.png)<br>**Menu PuwBar (Tiếng Việt)**: chọn kiểu giao diện & bật/tắt từng khu vực | ![Menu tray English](assets/screenshots/tray-en.png)<br>**Menu PuwBar (English)**: đổi ngôn ngữ ngay trong menu tray |
+| ![Bảng cài đặt Tiếng Việt](assets/screenshots/settings-vi.jpg)<br>**Cài đặt PuwBar (Tiếng Việt)**: chọn kiểu giao diện, khu vực kính, khởi động và ngôn ngữ | ![Bảng cài đặt English](assets/screenshots/settings-en.jpg)<br>**Cài đặt PuwBar (English)**: đầy đủ giao diện song ngữ Việt và Anh |
+| ![Menu tray Tiếng Việt](assets/screenshots/tray-vi.png)<br>**Menu chuột phải (Tiếng Việt)**: mở nhanh Cài đặt, Giới thiệu hoặc Thoát | ![Menu tray English](assets/screenshots/tray-en.png)<br>**Menu chuột phải (English)**: rút gọn còn 3 mục chính |
 
 ### Kiểu taskbar
 
