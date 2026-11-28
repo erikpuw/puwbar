@@ -110,6 +110,16 @@ thread_local! {
     static GFX: RefCell<Option<Gfx>> = const { RefCell::new(None) };
 }
 
+/// Closes the settings window if it is currently open.
+pub fn close() {
+    unsafe {
+        let existing = STATE.with(|s| s.borrow().as_ref().map(|st| st.hwnd));
+        if let Some(hwnd) = existing {
+            DestroyWindow(hwnd);
+        }
+    }
+}
+
 /// Opens the window, or brings the existing one to the front.
 pub fn open(owner: HWND) {
     unsafe {

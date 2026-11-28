@@ -1164,12 +1164,18 @@ private:
         }
 
         if (name == L"IconPanel") {
-            // On a vertical taskbar the stock icon panel is 48px wide inside a 42px button (and sits 3px off inside the
-            // 48px buttons of the overflow flyout), so the icons are off-centre. Make the panel exactly as wide as the
-            // 40px icon background and centre it in whatever slot it gets.
+            // On a vertical taskbar the stock icon panel is 48px wide (MinWidth=48) inside a 42px button (and sits
+            // 3-4px off inside the 48px buttons of the overflow flyout), so the icons are pushed right of Start.
+            // Override MinWidth/MaxWidth alongside Width so XAML's clamp(Width, MinWidth, MaxWidth) yields 40px.
             setProp(
                 xaml::FrameworkElement::HorizontalAlignmentProperty(),
                 winrt::box_value(vertical ? xaml::HorizontalAlignment::Center : xaml::HorizontalAlignment::Stretch));
+            setProp(
+                xaml::FrameworkElement::MinWidthProperty(),
+                winrt::box_value(0.0));
+            setProp(
+                xaml::FrameworkElement::MaxWidthProperty(),
+                winrt::box_value(vertical ? 40.0 : std::numeric_limits<double>::infinity()));
             setProp(
                 xaml::FrameworkElement::WidthProperty(),
                 winrt::box_value(vertical ? 40.0 : std::numeric_limits<double>::quiet_NaN()));
@@ -1789,24 +1795,31 @@ private:
 
         if (name == L"IconPanel") {
             ApplyLayoutProps(obj, type, name, parentType, true);
-            // Explorer resets IconPanel back to 48px / Stretch when switching VisualStates on vertical taskbars,
-            // shifting idle app icons 3px right of Start until hovered. Lock both properties while vertical.
+            // Explorer resets IconPanel back to MinWidth=48 / Width=48 / Stretch when switching VisualStates on
+            // vertical taskbars, pushing idle app icons 3-4px right of Start. Lock all four properties while vertical.
             try {
-                auto widthToken = obj.RegisterPropertyChangedCallback(
-                    xaml::FrameworkElement::WidthProperty(),
-                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
-                        try {
-                            TaskbarEdge edge = GetTaskbarEdge();
-                            if (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right) {
-                                double cur = winrt::unbox_value_or<double>(
-                                    sender.GetValue(dp), std::numeric_limits<double>::quiet_NaN());
-                                if (!(cur == 40.0)) {
-                                    sender.SetValue(dp, winrt::box_value(40.0));
+                auto lockDouble = [&](xaml::DependencyProperty const& prop, double want) {
+                    auto tok = obj.RegisterPropertyChangedCallback(
+                        prop,
+                        [want](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
+                            try {
+                                TaskbarEdge edge = GetTaskbarEdge();
+                                if (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right) {
+                                    double cur = winrt::unbox_value_or<double>(
+                                        sender.GetValue(dp), std::numeric_limits<double>::quiet_NaN());
+                                    if (!(cur == want)) {
+                                        sender.SetValue(dp, winrt::box_value(want));
+                                    }
                                 }
+                            } catch (...) {
                             }
-                        } catch (...) {
-                        }
-                    });
+                        });
+                    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                    m_propCallbacks.push_back({winrt::make_weak(obj), prop, tok});
+                };
+                lockDouble(xaml::FrameworkElement::MinWidthProperty(), 0.0);
+                lockDouble(xaml::FrameworkElement::MaxWidthProperty(), 40.0);
+                lockDouble(xaml::FrameworkElement::WidthProperty(), 40.0);
                 auto alignToken = obj.RegisterPropertyChangedCallback(
                     xaml::FrameworkElement::HorizontalAlignmentProperty(),
                     [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
@@ -1823,7 +1836,6 @@ private:
                         }
                     });
                 std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                m_propCallbacks.push_back({winrt::make_weak(obj), xaml::FrameworkElement::WidthProperty(), widthToken});
                 m_propCallbacks.push_back({winrt::make_weak(obj), xaml::FrameworkElement::HorizontalAlignmentProperty(), alignToken});
             } catch (...) {
             }
@@ -1945,6 +1957,7 @@ private:
     static bool IsOrientationLayoutProperty(xaml::DependencyProperty const& p) {
         return p == xaml::FrameworkElement::WidthProperty()
             || p == xaml::FrameworkElement::HeightProperty()
+            || p == xaml::FrameworkElement::MinWidthProperty()
             || p == xaml::FrameworkElement::MaxWidthProperty()
             || p == xaml::FrameworkElement::MarginProperty()
             || p == xaml::FrameworkElement::HorizontalAlignmentProperty()
@@ -2047,10 +2060,14 @@ private:
         }
         TaskbarEdge nowEdge = GetTaskbarEdge();
         bool nowVertical = (nowEdge == TaskbarEdge::Left || nowEdge == TaskbarEdge::Right);
-        // Pass 1: clear orientation-specific layout properties saved in the OTHER orientation so no stale
-        // PuwBar override (e.g. Height=NaN or Width=NaN from the previous edge) survives.
+        bool orientationSwitched = m_orientationSwitched.load();
+        // Pass 1: if the taskbar ever switched orientation while PuwBar was running (or a layout property was
+        // recorded in the other orientation), clear all orientation layout overrides so no stale PuwBar value
+        // or mid-transition Explorer dimension (e.g. horizontal Height=48 captured during a switch to vertical)
+        // is ever re-applied.
         for (auto it = items.rbegin(); it != items.rend(); ++it) {
-            if (it->vertical == nowVertical || !IsOrientationLayoutProperty(it->prop)) continue;
+            if (!IsOrientationLayoutProperty(it->prop)) continue;
+            if (!orientationSwitched && it->vertical == nowVertical) continue;
             try {
                 if (auto obj = it->target.get()) {
                     auto prop = it->prop;
@@ -2061,9 +2078,9 @@ private:
             } catch (...) {
             }
         }
-        // Pass 2: restore all non-layout properties and layout originals belonging to the CURRENT orientation.
+        // Pass 2: restore all non-layout properties, plus layout originals when the taskbar stayed in one orientation.
         for (auto it = items.rbegin(); it != items.rend(); ++it) {
-            if (it->vertical != nowVertical && IsOrientationLayoutProperty(it->prop)) continue;
+            if (IsOrientationLayoutProperty(it->prop) && (orientationSwitched || it->vertical != nowVertical)) continue;
             try {
                 if (auto obj = it->target.get()) {
                     auto prop = it->prop;
@@ -2080,8 +2097,8 @@ private:
             } catch (...) {
             }
         }
-        // Pass 3: force a full measure/arrange pass on the taskbar frames and newly un-collapsed BackgroundControl
-        // so Windows immediately repaints the native taskbar at the current orientation's exact dimensions.
+        // Pass 3: force a full measure/arrange pass on the taskbar frames, their parent host, and newly un-collapsed
+        // BackgroundControl so Windows immediately repaints the native taskbar at the current orientation's dimensions.
         std::vector<TrackedElement> layoutTargets;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -2097,7 +2114,8 @@ private:
         for (auto const& t : layoutTargets) {
             try {
                 if (auto obj = t.target.get()) {
-                    RunOnObjectThread(obj, [obj]() {
+                    bool isFrame = (t.type == L"Taskbar.TaskbarFrame");
+                    RunOnObjectThread(obj, [obj, isFrame]() {
                         if (auto fe = obj.try_as<xaml::FrameworkElement>()) {
                             try {
                                 fe.InvalidateMeasure();
@@ -2105,10 +2123,32 @@ private:
                                 fe.UpdateLayout();
                             } catch (...) {}
                         }
+                        if (isFrame) {
+                            try {
+                                if (auto parent = media::VisualTreeHelper::GetParent(obj)) {
+                                    if (auto pfe = parent.try_as<xaml::FrameworkElement>()) {
+                                        pfe.InvalidateMeasure();
+                                        pfe.InvalidateArrange();
+                                        pfe.UpdateLayout();
+                                    }
+                                }
+                            } catch (...) {}
+                        }
                     });
                 }
             } catch (...) {
             }
+        }
+        if (HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr)) {
+            SetWindowPos(
+                tray,
+                nullptr,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            RedrawWindow(tray, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         }
     }
 
@@ -2474,7 +2514,12 @@ private:
                     }
                     if (posIdx >= 0 && wait == WAIT_OBJECT_0 + static_cast<DWORD>(posIdx)) {
                         Sleep(120);
-                        lastEdge = GetTaskbarEdge();
+                        TaskbarEdge cur = GetTaskbarEdge();
+                        if ((cur == TaskbarEdge::Left || cur == TaskbarEdge::Right)
+                            != (lastEdge == TaskbarEdge::Left || lastEdge == TaskbarEdge::Right)) {
+                            m_orientationSwitched.store(true);
+                        }
+                        lastEdge = cur;
                         DispatchSyncAlignment();
                         if (stuckKey && posEv) {
                             RegNotifyChangeKeyValue(stuckKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, posEv, TRUE);
@@ -2483,6 +2528,10 @@ private:
                     if (wait == WAIT_TIMEOUT) {
                         TaskbarEdge cur = GetTaskbarEdge();
                         if (cur != lastEdge) {
+                            if ((cur == TaskbarEdge::Left || cur == TaskbarEdge::Right)
+                                != (lastEdge == TaskbarEdge::Left || lastEdge == TaskbarEdge::Right)) {
+                                m_orientationSwitched.store(true);
+                            }
                             lastEdge = cur;
                             DispatchSyncAlignment();
                         }
@@ -2545,6 +2594,7 @@ private:
     std::vector<winrt::weak_ref<xaml::UIElement>> m_childVisualTargets;
     std::vector<SavedTranslation> m_savedTranslations;
     std::atomic<bool> m_stopWatcher{false};
+    std::atomic<bool> m_orientationSwitched{false};
     std::thread m_watcher;
 };
 

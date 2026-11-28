@@ -1010,6 +1010,7 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        crate::settings::close();
         UnregisterHotKey(hwnd, EXIT_HOTKEY);
         remove_tray_icon(hwnd);
         DestroyWindow(hwnd);
