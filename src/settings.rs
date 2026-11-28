@@ -43,6 +43,8 @@ const H: f32 = 560.0;
 const NAV_W: f32 = 212.0;
 const DRAG_H: f32 = 44.0;
 const RADIUS: f32 = 16.0;
+/// Screen y where the scrolling body starts, just under the title block.
+const BODY_TOP: f32 = 108.0;
 /// How far the Look page scrolls (stage + five style cards are taller than the window).
 const LOOK_SCROLL: f32 = 120.0;
 const PAD: f32 = 30.0;
@@ -382,6 +384,8 @@ struct Pen<'a> {
     en: bool,
     /// Vertical shift of everything drawn from now on (page scroll and the title offset), so hit areas follow.
     dy: f32,
+    /// Hit areas above this screen y are cut off (scrolled out from under the fixed title).
+    clip_top: f32,
 }
 
 fn rc(r: R) -> D2D_RECT_F {
@@ -481,7 +485,11 @@ impl Pen<'_> {
     }
 
     fn hit(&mut self, r: R, a: Act) {
-        self.hits.push(((r.0, r.1 + self.dy, r.2, r.3), a));
+        let top = (r.1 + self.dy).max(self.clip_top);
+        let bottom = r.1 + self.dy + r.3;
+        if bottom > top {
+            self.hits.push(((r.0, top, r.2, bottom - top), a));
+        }
     }
 
     unsafe fn switch(&mut self, x: f32, y: f32, on: bool) {
@@ -516,7 +524,7 @@ unsafe fn render(hwnd: HWND) {
         g.rt.BeginDraw();
         g.rt.Clear(Some(&color(0x00000000)));
         g.rt.SetTransform(&Matrix3x2 { M11: k, M12: 0.0, M21: 0.0, M22: k, M31: 0.0, M32: 0.0 });
-        let mut p = Pen { g, k, hits: Vec::new(), hover, en: english, dy: 0.0 };
+        let mut p = Pen { g, k, hits: Vec::new(), hover, en: english, dy: 0.0, clip_top: f32::MIN };
         draw(&mut p, page, scroll, style, surfaces, autostart);
         hits = std::mem::take(&mut p.hits);
         let _ = g.rt.EndDraw(None, None);
@@ -591,10 +599,8 @@ unsafe fn draw(p: &mut Pen, page: u8, scroll: f32, style: u32, surfaces: u32, au
 
     // Page content: shifted up a little (the title sits near y 44) and by the scroll offset, clipped to the content area.
     let k = p.k;
-    p.dy = -12.0 - scroll;
     let base = Matrix3x2 { M11: k, M12: 0.0, M21: 0.0, M22: k, M31: 0.0, M32: 0.0 };
-    p.g.rt.PushAxisAlignedClip(&rc((NAV_W + 1.0, 0.0, W - NAV_W, H)), D2D1_ANTIALIAS_MODE_ALIASED);
-    p.g.rt.SetTransform(&Matrix3x2 { M32: p.dy * k, ..base });
+    p.g.rt.SetTransform(&Matrix3x2 { M32: -12.0 * k, ..base });
     let (title, hint) = match page {
         0 => (p.t("Tổng quan", "Overview"), p.t("Tình trạng hiện tại của PuwBar. Bấm một thẻ để chỉnh phần đó.", "How PuwBar is set up now. Click a card to change that part.")),
         1 => (p.t("Giao diện", "Look"), p.t("Chọn kiểu taskbar. Áp dụng ngay, không cần khởi động lại.", "Pick the taskbar style. It applies at once, no restart.")),
@@ -604,6 +610,12 @@ unsafe fn draw(p: &mut Pen, page: u8, scroll: f32, style: u32, surfaces: u32, au
     };
     p.title((CX, 58.0, CW, 32.0), title);
     p.text((CX, 90.0, CW, 22.0), hint, 12.0, false, MUTED, 0);
+    // Only the body scrolls, under the fixed title, so nothing slides over the close button.
+    p.g.rt.SetTransform(&base);
+    p.g.rt.PushAxisAlignedClip(&rc((NAV_W + 1.0, BODY_TOP, W - NAV_W, H - BODY_TOP)), D2D1_ANTIALIAS_MODE_ALIASED);
+    p.dy = -12.0 - scroll;
+    p.clip_top = BODY_TOP;
+    p.g.rt.SetTransform(&Matrix3x2 { M32: p.dy * k, ..base });
     match page {
         0 => page_overview(p, style, surfaces, autostart),
         1 => page_look(p, style),
@@ -614,6 +626,7 @@ unsafe fn draw(p: &mut Pen, page: u8, scroll: f32, style: u32, surfaces: u32, au
     p.g.rt.SetTransform(&base);
     p.g.rt.PopAxisAlignedClip();
     p.dy = 0.0;
+    p.clip_top = f32::MIN;
 
     let max = if page == 1 { LOOK_SCROLL } else { 0.0 };
     if max > 0.0 {
