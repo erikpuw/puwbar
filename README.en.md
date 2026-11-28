@@ -84,6 +84,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-dist.ps1
 
 This builds `target\release\puwbar.exe`, embeds it into the native setup binary, and writes `dist\puwbar-setup-v<version>-x64.exe`. `build.rs` compiles `tap/puwbar_tap.cpp` and embeds `assets/puwbar.ico` automatically.
 
+## Support
+
+If PuwBar helps, buy me a coffee ☕ [paypal.me/erikpuw](https://paypal.me/erikpuw). The same button is in Settings, About.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

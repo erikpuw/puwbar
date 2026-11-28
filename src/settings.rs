@@ -64,6 +64,7 @@ enum Act {
     Exit,
     Close,
     Github,
+    Donate,
 }
 
 type R = (f32, f32, f32, f32);
@@ -345,6 +346,9 @@ unsafe fn run(hwnd: HWND, act: Act) {
         Act::Github => {
             ShellExecuteW(null_mut(), wide("open").as_ptr(), wide("https://github.com/erikpuw/puwbar").as_ptr(), null(), null(), SW_SHOWNORMAL);
         }
+        Act::Donate => {
+            ShellExecuteW(null_mut(), wide("open").as_ptr(), wide("https://paypal.me/erikpuw").as_ptr(), null(), null(), SW_SHOWNORMAL);
+        }
     }
     InvalidateRect(hwnd, null(), 0);
 }
@@ -555,13 +559,25 @@ const STYLES: [(&str, &str, &str, &str); 5] = [
 /// Segoe Fluent Icons glyphs for the five pages.
 const NAV_ICONS: [&str; 5] = ["\u{E80F}", "\u{E790}", "\u{E71D}", "\u{E713}", "\u{E946}"];
 
-/// The brand mark: a dark tile holding a pill of three dots. `s` is the tile size.
+/// The app icon from the exe's own ICON resource, drawn into a `s` x `s` tile.
 unsafe fn logo(p: &Pen, x: f32, y: f32, s: f32) {
-    p.fill((x, y, s, s), s * 0.28, 0xF2191A1F);
-    let (pw, ph) = (s * 0.72, s * 0.34);
-    p.stroke((x + (s - pw) / 2.0, y + (s - ph) / 2.0, pw, ph), ph / 2.0, 0xFFFFFFFF, s * 0.036);
-    for i in 0..3 {
-        p.circle(x + s * 0.28 + i as f32 * s * 0.22, y + s / 2.0, s * 0.05, 0xFFFFFFFF);
+    thread_local! {
+        static ICON: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    if ICON.with(|c| c.get()) == 0 {
+        let icon = LoadImageW(GetModuleHandleW(null()), 1 as _, IMAGE_ICON, 256, 256, 0);
+        if !icon.is_null() {
+            let mut bitmap = null_mut();
+            gp::GdipCreateBitmapFromHICON(icon, &mut bitmap);
+            DestroyIcon(icon);
+            ICON.with(|c| c.set(bitmap as usize));
+        }
+    }
+    let bitmap = ICON.with(|c| c.get()) as *mut gp::GpBitmap;
+    if !bitmap.is_null() {
+        gp::GdipSetInterpolationMode(p.g, gp::InterpolationModeHighQualityBicubic);
+        let k = p.k;
+        gp::GdipDrawImageRect(p.g, bitmap.cast(), x * k, y * k, s * k, s * k);
     }
 }
 
@@ -796,14 +812,19 @@ unsafe fn page_about(p: &mut Pen) {
         p.circle(CX + 44.0, y + 11.0, 2.5, ACCENT);
         p.text((CX + 58.0, y, CW - 80.0, 22.0), line, 12.5, false, 0xFFD9DBE2, 0);
     }
-    p.text((CX, 424.0, CW, 20.0), p.t("Thấy PuwBar có ích thì cho tác giả một ngôi sao trên GitHub.", "If PuwBar helps, a star on GitHub is appreciated."), 11.5, false, MUTED, 1);
+    p.text((CX, 424.0, CW, 20.0), p.t("Thấy PuwBar có ích thì mời tác giả một ly cà phê.", "If PuwBar helps, buy the author a coffee."), 11.5, false, MUTED, 1);
 
-    let gh = (mid - 146.0, 456.0, 130.0, 38.0);
+    let gh = (mid - 235.0, 456.0, 130.0, 38.0);
     let ghot = p.hot(Act::Github);
     p.fill(gh, 19.0, if ghot { 0xFF4BE07A } else { ACCENT });
     p.text(gh, p.t("Mở GitHub", "Open GitHub"), 13.0, true, 0xFF0B1A10, 1);
     p.hit(gh, Act::Github);
-    let ex = (mid - 4.0, 456.0, 150.0, 38.0);
+    let dn = (mid - 95.0, 456.0, 150.0, 38.0);
+    p.fill(dn, 19.0, if p.hot(Act::Donate) { CARD_HOT } else { 0x00000000 });
+    p.stroke(dn, 19.0, 0x66FFFFFF, 1.0);
+    p.text(dn, p.t("Ủng hộ PayPal", "Donate (PayPal)"), 13.0, false, TEXT, 1);
+    p.hit(dn, Act::Donate);
+    let ex = (mid + 65.0, 456.0, 170.0, 38.0);
     p.fill(ex, 19.0, if p.hot(Act::Exit) { CARD_HOT } else { 0x00000000 });
     p.stroke(ex, 19.0, 0x66FFFFFF, 1.0);
     p.text(ex, p.t("Thoát PuwBar", "Exit PuwBar"), 13.0, false, TEXT, 1);

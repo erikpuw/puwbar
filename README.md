@@ -84,6 +84,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-dist.ps1
 
 Lệnh trên sẽ biên dịch `target\release\puwbar.exe`, đóng gói trình cài đặt và xuất ra `dist\puwbar-setup-v<version>-x64.exe`. `build.rs` tự biên dịch `tap/puwbar_tap.cpp` và nhúng kèm `assets/puwbar.ico`.
 
+## Ủng hộ
+
+Nếu PuwBar có ích, mời tôi một ly cà phê ☕ [paypal.me/erikpuw](https://paypal.me/erikpuw). Nút ủng hộ cũng nằm trong Cài đặt, mục Giới thiệu.
+
 ## Giấy phép
 
 Phát hành theo giấy phép MIT, xem [LICENSE](LICENSE).
