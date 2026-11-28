@@ -2073,30 +2073,55 @@ private:
 
     // Writes the taskbar's XAML tree to %TEMP%\puwbar_diag_tap.txt for puwbar.exe to fold into its report.
     void DumpTreeOnUiThread() {
-        std::vector<xaml::DependencyObject> frames;
+        // Every tracked element that is still alive, grouped by the root of its visual tree: after a taskbar position
+        // change Windows replaces the frame, and this shows which tree PuwBar still holds and which one it never saw.
+        struct Alive {
+            std::wstring type;
+            std::wstring name;
+            xaml::DependencyObject obj{nullptr};
+        };
+        std::vector<Alive> alive;
+        size_t total = 0;
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            total = m_tracked.size();
             for (auto& t : m_tracked) {
-                if (t.type == L"Taskbar.TaskbarFrame") {
-                    if (auto obj = t.target.get()) frames.push_back(obj);
-                }
+                if (auto obj = t.target.get()) alive.push_back(Alive{t.type, t.name, obj});
             }
         }
-        std::string out = "XAML tree of the taskbar (Explorer), " + std::to_string(frames.size()) + " taskbar frame(s)\n";
-        int index = 0;
-        for (auto& frame : frames) {
+        std::string out = "tracked elements: " + std::to_string(total) + ", still alive: " + std::to_string(alive.size()) + "\n";
+        std::vector<xaml::UIElement> roots;
+        std::vector<std::string> kinds;
+        for (auto& e : alive) {
             xaml::UIElement root{nullptr};
             try {
-                xaml::DependencyObject cur = frame;
+                xaml::DependencyObject cur = e.obj;
                 while (cur) {
                     if (auto ui = cur.try_as<xaml::UIElement>()) root = ui;
                     cur = media::VisualTreeHelper::GetParent(cur);
                 }
             } catch (...) {
             }
-            out += "\n--- frame " + std::to_string(index++) + " ---\n";
+            std::string label = Utf8(e.type) + (e.name.empty() ? "" : "#" + Utf8(e.name));
+            if (!root) {
+                out += "  detached: " + label + "\n";
+                continue;
+            }
+            size_t k = 0;
+            while (k < roots.size() && winrt::get_abi(roots[k]) != winrt::get_abi(root)) ++k;
+            if (k == roots.size()) {
+                roots.push_back(root);
+                kinds.emplace_back();
+            }
+            kinds[k] += "    " + label + "\n";
+        }
+        int index = 0;
+        for (auto& root : roots) {
+            out += "\n--- visual tree " + std::to_string(index) + ": tracked elements under it ---\n" + kinds[static_cast<size_t>(index)];
+            out += "--- tree " + std::to_string(index) + " ---\n";
+            ++index;
             int budget = 4000;
-            if (root) DumpNode(root, root, 0, budget, out);
+            DumpNode(root, root, 0, budget, out);
         }
         wchar_t tmp[MAX_PATH]{};
         DWORD len = GetTempPathW(MAX_PATH, tmp);
