@@ -911,8 +911,6 @@ pub fn run(seconds: Option<u32>) -> Result<(), String> {
             CloseHandle(mutex);
             return Ok(());
         }
-        // The diagnostics event must exist before the tap attaches, because the tap opens it by name.
-        crate::diag::create_event();
         let stop_event = CreateEventW(null(), 1, 0, wide(STOP_EVENT_NAME).as_ptr());
         let ready_event = CreateEventW(null(), 1, 0, wide(READY_EVENT_NAME).as_ptr());
         let reload_event = CreateEventW(null(), 0, 0, wide(RELOAD_EVENT_NAME).as_ptr());

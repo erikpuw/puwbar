@@ -2165,6 +2165,13 @@ private:
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             RedrawWindow(tray, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         }
+        if (orientationSwitched) {
+            SendNotifyMessageW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                reinterpret_cast<LPARAM>(L"TraySettings"));
+        }
     }
 
     void ReloadStyleOnUiThread() {
