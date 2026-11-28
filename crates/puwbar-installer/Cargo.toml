@@ -1,6 +1,6 @@
 [package]
 name = "puwbar-installer"
-version = "1.0.9"
+version = "1.0.10"
 edition = "2021"
 description = "Lightweight native Win32 GUI installer and uninstaller for PuwBar"
 publish = false

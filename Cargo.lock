@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "puwbar"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "windows",
  "windows-collections",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "puwbar-installer"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "flate2",
  "windows",
