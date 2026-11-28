@@ -1165,22 +1165,50 @@ private:
 
         if (name == L"IconPanel") {
             // Taskbar.TaskListButton's custom ArrangeOverride always arranges IconPanel at 48px inside a 42px
-            // vertical button (ignoring Width/MinWidth/MaxWidth), placing BackgroundElement at x=7..47 and Icon
-            // at x=15 (+3px right of Start at x=12). Shift it -3px in render space so icons align to x=12.0.
+            // vertical button on the main taskbar, placing BackgroundElement at x=7..47 and Icon at x=15 (+3px
+            // right of Start at x=12). Inside the "..." overflow flyout, buttons are already 48px wide and centred,
+            // so only shift main-taskbar buttons by -3px.
+            bool inOverflow = false;
+            try {
+                xaml::DependencyObject cur = obj;
+                for (int d = 0; cur && d < 8; ++d) {
+                    auto cn = winrt::get_class_name(cur);
+                    if (cn == L"Taskbar.OverflowFlyoutList" || cn == L"Taskbar.FlyoutFrame") {
+                        inOverflow = true;
+                        break;
+                    }
+                    cur = media::VisualTreeHelper::GetParent(cur);
+                }
+            } catch (...) {
+            }
             media::TranslateTransform shift;
-            shift.X(vertical ? -3.0 : 0.0);
+            shift.X((vertical && !inOverflow) ? -3.0 : 0.0);
             setProp(xaml::UIElement::RenderTransformProperty(), shift);
             return;
         }
 
         if (name == L"RunningIndicator") {
+            bool inOverflow = false;
+            try {
+                xaml::DependencyObject cur = obj;
+                for (int d = 0; cur && d < 8; ++d) {
+                    auto cn = winrt::get_class_name(cur);
+                    if (cn == L"Taskbar.OverflowFlyoutList" || cn == L"Taskbar.FlyoutFrame") {
+                        inOverflow = true;
+                        break;
+                    }
+                    cur = media::VisualTreeHelper::GetParent(cur);
+                }
+            } catch (...) {
+            }
             if (edge == TaskbarEdge::Right) {
                 setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Right));
                 setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             } else if (edge == TaskbarEdge::Left) {
                 setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Left));
-                // Compensate for IconPanel's -3px render shift so the left indicator stays inside RootGrid.
-                setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{4.0, 1.0, 1.0, 1.0}));
+                // Compensate for IconPanel's -3px render shift on the main taskbar only.
+                double leftM = inOverflow ? 1.0 : 4.0;
+                setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{leftM, 1.0, 1.0, 1.0}));
             } else {
                 setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Center));
                 setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
