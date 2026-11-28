@@ -1,33 +1,39 @@
 //! Settings window: a dark, rounded, custom-drawn panel with a side navigation (GDI+), opened by a left click on
 //! the tray icon. Every change goes through the same `tap::apply_*` functions the tray menu uses.
 
-use crate::{desktop::wide, tap};
+use crate::{
+    desktop::wide,
+    gfx::{color, Gfx},
+    tap,
+};
 use std::{
     cell::RefCell,
     ptr::{null, null_mut},
-    sync::Once,
 };
+use windows::core::{w, PCWSTR};
+use windows::Win32::Graphics::Direct2D::Common::*;
+use windows::Win32::Graphics::Direct2D::*;
+use windows::Win32::Graphics::DirectWrite::*;
+use windows_numerics::{Matrix3x2, Vector2};
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::{
-        Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute},
+        Dwm::DwmSetWindowAttribute,
         Gdi::{
-            AlphaBlend, BeginPaint, BitBlt, CreateCompatibleDC, CreateRoundRectRgn, CreateDIBSection, DeleteDC, DeleteObject, EndPaint, SetWindowRgn,
-            BITMAPINFO, BITMAPINFOHEADER, BLACKNESS, BLENDFUNCTION, DIB_RGB_COLORS,
-            GetMonitorInfoW, InvalidateRect, MonitorFromPoint, ScreenToClient, SelectObject, MONITORINFO,
-            MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
+            CreateCompatibleDC, CreateRoundRectRgn, DeleteDC, DeleteObject, GetDIBits, GetMonitorInfoW, InvalidateRect,
+            MonitorFromPoint, ScreenToClient, SetWindowRgn, ValidateRect, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+            MONITORINFO, MONITOR_DEFAULTTONEAREST,
         },
-        GdiPlus as gp,
     },
     System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
     UI::{
+        Controls::WM_MOUSELEAVE,
         HiDpi::{
             GetDpiForMonitor, GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
             MDT_EFFECTIVE_DPI,
         },
-        Controls::{MARGINS, WM_MOUSELEAVE},
-        Shell::ShellExecuteW,
         Input::KeyboardAndMouse::{ReleaseCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE},
+        Shell::ShellExecuteW,
         WindowsAndMessaging::*,
     },
 };
@@ -85,20 +91,7 @@ struct State {
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
-}
-
-fn startup_gdiplus() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        let mut token = 0usize;
-        let input = gp::GdiplusStartupInput {
-            GdiplusVersion: 1,
-            DebugEventCallback: 0,
-            SuppressBackgroundThread: 0,
-            SuppressExternalCodecs: 0,
-        };
-        gp::GdiplusStartup(&mut token, &input, null_mut());
-    });
+    static GFX: RefCell<Option<Gfx>> = const { RefCell::new(None) };
 }
 
 /// Opens the window, or brings the existing one to the front.
@@ -110,7 +103,6 @@ pub fn open(owner: HWND) {
             SetForegroundWindow(hwnd);
             return;
         }
-        startup_gdiplus();
         let hinst = GetModuleHandleW(null());
         let class = wide("PuwBarSettings");
         let mut wc: WNDCLASSEXW = std::mem::zeroed();
@@ -139,7 +131,7 @@ pub fn open(owner: HWND) {
         let x = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - w) / 2;
         let y = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - h) / 2;
         let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW,
+            WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
             class.as_ptr(),
             wide("PuwBar").as_ptr(),
             WS_POPUP,
@@ -163,10 +155,16 @@ pub fn open(owner: HWND) {
         let on: i32 = 1;
         DwmSetWindowAttribute(hwnd, 20, (&on as *const i32).cast(), 4);
         blur_behind(hwnd);
-        let margins = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
-        DwmExtendFrameIntoClientArea(hwnd, &margins);
         let corner = (RADIUS * 2.0 * k) as i32;
         SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, corner, corner), 1);
+        let gfx = match Gfx::new(windows::Win32::Foundation::HWND(hwnd as _), w, h, icon_pixels()) {
+            Ok(g) => g,
+            Err(_) => {
+                DestroyWindow(hwnd);
+                return;
+            }
+        };
+        GFX.with(|g| *g.borrow_mut() = Some(gfx));
         STATE.with(|s| {
             *s.borrow_mut() = Some(State {
                 hwnd,
@@ -181,6 +179,7 @@ pub fn open(owner: HWND) {
         });
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
+        render(hwnd);
     }
 }
 
@@ -235,7 +234,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
     match msg {
         WM_ERASEBKGND => return 1,
         WM_PAINT => {
-            paint(hwnd);
+            render(hwnd);
             return 0;
         }
         WM_NCHITTEST => {
@@ -312,6 +311,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         WM_DESTROY => {
             STATE.with(|s| *s.borrow_mut() = None);
+            GFX.with(|g| *g.borrow_mut() = None);
         }
         _ => {}
     }
@@ -374,21 +374,25 @@ unsafe fn run(hwnd: HWND, act: Act) {
 
 // ---------------------------------------------------------------- painting
 
-struct Pen {
-    g: *mut gp::GpGraphics,
-    fam: *mut gp::GpFontFamily,
-    dfam: *mut gp::GpFontFamily,
-    /// Vertical shift of everything drawn from now on (page scroll and the title offset), so hit areas follow.
-    dy: f32,
-    ifam: *mut gp::GpFontFamily,
-    fmt: [*mut gp::GpStringFormat; 4],
+struct Pen<'a> {
+    g: &'a Gfx,
     k: f32,
     hits: Vec<(R, Act)>,
     hover: Option<Act>,
     en: bool,
+    /// Vertical shift of everything drawn from now on (page scroll and the title offset), so hit areas follow.
+    dy: f32,
 }
 
-impl Pen {
+fn rc(r: R) -> D2D_RECT_F {
+    D2D_RECT_F { left: r.0, top: r.1, right: r.0 + r.2, bottom: r.1 + r.3 }
+}
+
+fn pt(x: f32, y: f32) -> Vector2 {
+    Vector2 { X: x, Y: y }
+}
+
+impl Pen<'_> {
     fn t(&self, vi: &'static str, en: &'static str) -> &'static str {
         if self.en {
             en
@@ -397,92 +401,78 @@ impl Pen {
         }
     }
 
-    unsafe fn path(&self, r: R, rad: f32) -> *mut gp::GpPath {
-        let (x, y, w, h) = (r.0 * self.k, r.1 * self.k, r.2 * self.k, r.3 * self.k);
-        let d = (rad * self.k * 2.0).min(w).min(h).max(1.0);
-        let mut p = null_mut();
-        gp::GdipCreatePath(gp::FillModeAlternate, &mut p);
-        gp::GdipAddPathArc(p, x, y, d, d, 180.0, 90.0);
-        gp::GdipAddPathArc(p, x + w - d, y, d, d, 270.0, 90.0);
-        gp::GdipAddPathArc(p, x + w - d, y + h - d, d, d, 0.0, 90.0);
-        gp::GdipAddPathArc(p, x, y + h - d, d, d, 90.0, 90.0);
-        gp::GdipClosePathFigure(p);
-        p
+    unsafe fn fill(&self, r: R, rad: f32, c: u32) {
+        self.g.set_color(c);
+        if rad <= 0.0 {
+            self.g.rt.FillRectangle(&rc(r), &self.g.brush);
+        } else {
+            let rr = D2D1_ROUNDED_RECT { rect: rc(r), radiusX: rad.min(r.2 / 2.0), radiusY: rad.min(r.3 / 2.0) };
+            self.g.rt.FillRoundedRectangle(&rr, &self.g.brush);
+        }
     }
 
-    unsafe fn fill(&self, r: R, rad: f32, color: u32) {
-        let mut b = null_mut();
-        gp::GdipCreateSolidFill(color, &mut b);
-        let p = self.path(r, rad);
-        gp::GdipFillPath(self.g, b.cast(), p);
-        gp::GdipDeletePath(p);
-        gp::GdipDeleteBrush(b.cast());
+    unsafe fn stroke(&self, r: R, rad: f32, c: u32, width: f32) {
+        self.g.set_color(c);
+        let half = width / 2.0;
+        let inner = (r.0 + half, r.1 + half, r.2 - width, r.3 - width);
+        let rad = (rad - half).max(0.0);
+        let rr = D2D1_ROUNDED_RECT { rect: rc(inner), radiusX: rad.min(inner.2 / 2.0), radiusY: rad.min(inner.3 / 2.0) };
+        self.g.rt.DrawRoundedRectangle(&rr, &self.g.brush, width, None);
     }
 
-    unsafe fn stroke(&self, r: R, rad: f32, color: u32, width: f32) {
-        let mut pen = null_mut();
-        gp::GdipCreatePen1(color, width * self.k, gp::UnitPixel, &mut pen);
-        let p = self.path(r, rad);
-        gp::GdipDrawPath(self.g, pen, p);
-        gp::GdipDeletePath(p);
-        gp::GdipDeletePen(pen);
+    unsafe fn circle(&self, cx: f32, cy: f32, rad: f32, c: u32) {
+        self.g.set_color(c);
+        self.g.rt.FillEllipse(&D2D1_ELLIPSE { point: pt(cx, cy), radiusX: rad, radiusY: rad }, &self.g.brush);
     }
 
-    unsafe fn circle(&self, cx: f32, cy: f32, rad: f32, color: u32) {
-        let mut b = null_mut();
-        gp::GdipCreateSolidFill(color, &mut b);
-        let k = self.k;
-        gp::GdipFillEllipse(self.g, b.cast(), (cx - rad) * k, (cy - rad) * k, rad * 2.0 * k, rad * 2.0 * k);
-        gp::GdipDeleteBrush(b.cast());
-    }
-
-    unsafe fn line(&self, a: (f32, f32), b: (f32, f32), color: u32, width: f32) {
-        let mut pen = null_mut();
-        gp::GdipCreatePen1(color, width * self.k, gp::UnitPixel, &mut pen);
-        let k = self.k;
-        gp::GdipDrawLine(self.g, pen, a.0 * k, a.1 * k, b.0 * k, b.1 * k);
-        gp::GdipDeletePen(pen);
+    unsafe fn line(&self, a: (f32, f32), b: (f32, f32), c: u32, width: f32) {
+        self.g.set_color(c);
+        self.g.rt.DrawLine(pt(a.0, a.1), pt(b.0, b.1), &self.g.brush, width, None);
     }
 
     /// Diagonal two-colour gradient inside a rounded rect (a stand-in wallpaper for the style previews).
     unsafe fn gradient(&self, r: R, rad: f32, c1: u32, c2: u32) {
-        let k = self.k;
-        let a = gp::PointF { X: r.0 * k, Y: r.1 * k };
-        let b = gp::PointF { X: (r.0 + r.2) * k, Y: (r.1 + r.3) * k };
-        let mut br = null_mut();
-        gp::GdipCreateLineBrush(&a, &b, c1, c2, 3, &mut br); // 3 = WrapModeTileFlipXY, no seam
-        let path = self.path(r, rad);
-        gp::GdipFillPath(self.g, br.cast(), path);
-        gp::GdipDeletePath(path);
-        gp::GdipDeleteBrush(br.cast());
+        let stops = [D2D1_GRADIENT_STOP { position: 0.0, color: color(c1) }, D2D1_GRADIENT_STOP { position: 1.0, color: color(c2) }];
+        let Ok(coll) = self.g.rt.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP) else { return };
+        let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES { startPoint: pt(r.0, r.1), endPoint: pt(r.0 + r.2, r.1 + r.3) };
+        let Ok(brush) = self.g.rt.CreateLinearGradientBrush(&props, None, &coll) else { return };
+        let rr = D2D1_ROUNDED_RECT { rect: rc(r), radiusX: rad, radiusY: rad };
+        self.g.rt.FillRoundedRectangle(&rr, &brush);
+    }
+
+    unsafe fn text_in(&self, family: PCWSTR, r: R, s: &str, size: f32, bold: bool, c: u32, align: usize) {
+        let weight = if bold { DWRITE_FONT_WEIGHT_SEMI_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL };
+        let Ok(fmt) = self.g.dw.CreateTextFormat(family, None, weight, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, w!("vi-VN")) else {
+            return;
+        };
+        let (horizontal, wrap) = match align {
+            0 => (DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP),
+            1 => (DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_WORD_WRAPPING_NO_WRAP),
+            2 => (DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_WORD_WRAPPING_NO_WRAP),
+            _ => (DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_WRAP),
+        };
+        let _ = fmt.SetTextAlignment(horizontal);
+        let _ = fmt.SetParagraphAlignment(if align < 3 { DWRITE_PARAGRAPH_ALIGNMENT_CENTER } else { DWRITE_PARAGRAPH_ALIGNMENT_NEAR });
+        let _ = fmt.SetWordWrapping(wrap);
+        self.g.set_color(c);
+        let text: Vec<u16> = s.encode_utf16().collect();
+        self.g.rt.DrawText(&text, &fmt, &rc(r), &self.g.brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
     }
 
     /// `align`: 0 left, 1 center, 2 right (single line, vertically centred); 3 wrapping paragraph, top-left.
-    unsafe fn text(&self, r: R, s: &str, size: f32, bold: bool, color: u32, align: usize) {
-        let mut font = null_mut();
-        gp::GdipCreateFont(self.fam, size * self.k, if bold { 1 } else { 0 }, gp::UnitPixel, &mut font);
-        let mut b = null_mut();
-        gp::GdipCreateSolidFill(color, &mut b);
-        let rect = gp::RectF { X: r.0 * self.k, Y: r.1 * self.k, Width: r.2 * self.k, Height: r.3 * self.k };
-        let w = wide(s);
-        gp::GdipDrawString(self.g, w.as_ptr(), -1, font, &rect, self.fmt[align], b.cast());
-        gp::GdipDeleteBrush(b.cast());
-        gp::GdipDeleteFont(font);
+    unsafe fn text(&self, r: R, s: &str, size: f32, bold: bool, c: u32, align: usize) {
+        self.text_in(w!("Segoe UI"), r, s, size, bold, c, align);
+    }
+
+    unsafe fn title(&self, r: R, s: &str) {
+        self.text_in(self.g.title_family, r, s, 24.0, true, TEXT, 0);
     }
 
     /// One glyph of the Segoe Fluent Icons font, centred in `r`.
-    unsafe fn icon(&self, r: R, glyph: &str, size: f32, color: u32) {
-        if self.ifam.is_null() {
-            return;
+    unsafe fn icon(&self, r: R, glyph: &str, size: f32, c: u32) {
+        if let Some(family) = self.g.icon_family {
+            self.text_in(family, r, glyph, size, false, c, 1);
         }
-        let mut font = null_mut();
-        gp::GdipCreateFont(self.ifam, size * self.k, 0, gp::UnitPixel, &mut font);
-        let mut b = null_mut();
-        gp::GdipCreateSolidFill(color, &mut b);
-        let rect = gp::RectF { X: r.0 * self.k, Y: r.1 * self.k, Width: r.2 * self.k, Height: r.3 * self.k };
-        gp::GdipDrawString(self.g, wide(glyph).as_ptr(), -1, font, &rect, self.fmt[1], b.cast());
-        gp::GdipDeleteBrush(b.cast());
-        gp::GdipDeleteFont(font);
     }
 
     fn hot(&self, a: Act) -> bool {
@@ -509,85 +499,69 @@ impl Pen {
     }
 }
 
-
-unsafe fn paint(hwnd: HWND) {
-    let mut ps: PAINTSTRUCT = std::mem::zeroed();
-    let hdc = BeginPaint(hwnd, &mut ps);
+/// One frame: Direct2D into the swap chain, then present. Redraws replace the whole frame, so nothing flashes.
+unsafe fn render(hwnd: HWND) {
+    ValidateRect(hwnd, null());
     let k = GetDpiForWindow(hwnd) as f32 / 96.0;
-    let (pw, ph) = ((W * k) as i32, (H * k) as i32);
-    let mem = CreateCompatibleDC(hdc);
-    // A top-down 32-bit surface that starts fully transparent, so the acrylic backdrop shows through unpainted areas.
-    let mut bi: BITMAPINFO = std::mem::zeroed();
-    bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-    bi.bmiHeader.biWidth = pw;
-    bi.bmiHeader.biHeight = -ph;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    let mut bits: *mut std::ffi::c_void = null_mut();
-    let bmp = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
-    let old = SelectObject(mem, bmp);
-
     let mut snap = None;
     with_state(|st| snap = Some((st.page, st.hover, st.prefs.style, st.prefs.surfaces, st.prefs.autostart, st.prefs.english, st.scroll)));
-    if let (Some((page, hover, style, surfaces, autostart, english, scroll)), false) = (snap, bits.is_null()) {
-        let mut g = null_mut();
-        gp::GdipCreateFromHDC(mem, &mut g);
-        gp::GdipSetSmoothingMode(g, gp::SmoothingModeAntiAlias);
-        gp::GdipSetTextRenderingHint(g, gp::TextRenderingHintAntiAliasGridFit);
-        let mut fam = null_mut();
-        gp::GdipCreateFontFamilyFromName(wide("Segoe UI").as_ptr(), null_mut(), &mut fam);
-        let mut dfam = null_mut();
-        if gp::GdipCreateFontFamilyFromName(wide("Segoe UI Variable Display").as_ptr(), null_mut(), &mut dfam) != 0 {
-            dfam = fam;
-        }
-        let mut ifam = null_mut();
-        if gp::GdipCreateFontFamilyFromName(wide("Segoe Fluent Icons").as_ptr(), null_mut(), &mut ifam) != 0 {
-            ifam = null_mut();
-            if gp::GdipCreateFontFamilyFromName(wide("Segoe MDL2 Assets").as_ptr(), null_mut(), &mut ifam) != 0 {
-                ifam = null_mut();
-            }
-        }
-        let mut fmt = [null_mut(); 4];
-        for (i, f) in fmt.iter_mut().enumerate() {
-            let single = i < 3;
-            gp::GdipCreateStringFormat(if single { 0x1000 } else { 0 }, 0, f); // 0x1000 = StringFormatFlagsNoWrap
-            gp::GdipSetStringFormatAlign(*f, if single { i as i32 } else { 0 });
-            gp::GdipSetStringFormatLineAlign(*f, if single { 1 } else { 0 });
-        }
-        let mut p = Pen { g, fam, dfam, dy: 0.0, ifam, fmt, k, hits: Vec::new(), hover, en: english };
+    let Some((page, hover, style, surfaces, autostart, english, scroll)) = snap else {
+        return;
+    };
+    let mut hits = Vec::new();
+    GFX.with(|cell| {
+        let cell = cell.borrow();
+        let Some(g) = cell.as_ref() else { return };
+        g.rt.BeginDraw();
+        g.rt.Clear(Some(&color(0x00000000)));
+        g.rt.SetTransform(&Matrix3x2 { M11: k, M12: 0.0, M21: 0.0, M22: k, M31: 0.0, M32: 0.0 });
+        let mut p = Pen { g, k, hits: Vec::new(), hover, en: english, dy: 0.0 };
         draw(&mut p, page, scroll, style, surfaces, autostart);
-        let hits = std::mem::take(&mut p.hits);
-        for f in fmt {
-            gp::GdipDeleteStringFormat(f);
-        }
-        if !ifam.is_null() {
-            gp::GdipDeleteFontFamily(ifam);
-        }
-        if dfam != fam {
-            gp::GdipDeleteFontFamily(dfam);
-        }
-        gp::GdipDeleteFontFamily(fam);
-        gp::GdipDeleteGraphics(g);
-        with_state(|st| st.hits = hits);
+        hits = std::mem::take(&mut p.hits);
+        let _ = g.rt.EndDraw(None, None);
+        let _ = g.present();
+    });
+    with_state(|st| st.hits = hits);
+}
 
-        // AlphaBlend wants premultiplied alpha; GDI+ leaves straight alpha.
-        let px = std::slice::from_raw_parts_mut(bits.cast::<u32>(), (pw * ph) as usize);
-        for v in px.iter_mut() {
-            let a = *v >> 24;
-            if a < 255 {
-                let ch = |sh: u32| (((*v >> sh) & 0xff) * a + 127) / 255;
-                *v = (a << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0);
-            }
-        }
-        BitBlt(hdc, 0, 0, pw, ph, null_mut(), 0, 0, BLACKNESS);
-        let blend = BLENDFUNCTION { BlendOp: 0, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: 1 };
-        AlphaBlend(hdc, 0, 0, pw, ph, mem, 0, 0, pw, ph, blend);
+/// The exe's own ICON resource as premultiplied BGRA pixels, for the logo.
+unsafe fn icon_pixels() -> Option<(Vec<u8>, u32, u32)> {
+    const SIZE: i32 = 256;
+    let icon = LoadImageW(GetModuleHandleW(null()), 1 as _, IMAGE_ICON, SIZE, SIZE, 0);
+    if icon.is_null() {
+        return None;
     }
-
-    SelectObject(mem, old);
-    DeleteObject(bmp);
-    DeleteDC(mem);
-    EndPaint(hwnd, &ps);
+    let mut info: ICONINFO = std::mem::zeroed();
+    if GetIconInfo(icon, &mut info) == 0 {
+        DestroyIcon(icon);
+        return None;
+    }
+    let dc = CreateCompatibleDC(null_mut());
+    let mut bi: BITMAPINFO = std::mem::zeroed();
+    bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    bi.bmiHeader.biWidth = SIZE;
+    bi.bmiHeader.biHeight = -SIZE;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    let mut px = vec![0u8; (SIZE * SIZE * 4) as usize];
+    let lines = GetDIBits(dc, info.hbmColor, 0, SIZE as u32, px.as_mut_ptr().cast(), &mut bi, DIB_RGB_COLORS);
+    DeleteDC(dc);
+    DeleteObject(info.hbmColor);
+    DeleteObject(info.hbmMask);
+    DestroyIcon(icon);
+    if lines == 0 {
+        return None;
+    }
+    if px.chunks_exact(4).all(|c| c[3] == 0) {
+        px.chunks_exact_mut(4).for_each(|c| c[3] = 255);
+    }
+    for c in px.chunks_exact_mut(4) {
+        let a = c[3] as u32;
+        for v in &mut c[..3] {
+            *v = (*v as u32 * a / 255) as u8;
+        }
+    }
+    Some((px, SIZE as u32, SIZE as u32))
 }
 
 const STYLES: [(&str, &str, &str, &str); 5] = [
@@ -601,25 +575,10 @@ const STYLES: [(&str, &str, &str, &str); 5] = [
 /// Segoe Fluent Icons glyphs for the five pages.
 const NAV_ICONS: [&str; 5] = ["\u{E80F}", "\u{E790}", "\u{E71D}", "\u{E713}", "\u{E946}"];
 
-/// The app icon from the exe's own ICON resource, drawn into a `s` x `s` tile.
+/// The app icon, drawn into a `s` x `s` tile.
 unsafe fn logo(p: &Pen, x: f32, y: f32, s: f32) {
-    thread_local! {
-        static ICON: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    }
-    if ICON.with(|c| c.get()) == 0 {
-        let icon = LoadImageW(GetModuleHandleW(null()), 1 as _, IMAGE_ICON, 256, 256, 0);
-        if !icon.is_null() {
-            let mut bitmap = null_mut();
-            gp::GdipCreateBitmapFromHICON(icon, &mut bitmap);
-            DestroyIcon(icon);
-            ICON.with(|c| c.set(bitmap as usize));
-        }
-    }
-    let bitmap = ICON.with(|c| c.get()) as *mut gp::GpBitmap;
-    if !bitmap.is_null() {
-        gp::GdipSetInterpolationMode(p.g, gp::InterpolationModeHighQualityBicubic);
-        let k = p.k;
-        gp::GdipDrawImageRect(p.g, bitmap.cast(), x * k, y * k, s * k, s * k);
+    if let Some(bitmap) = &p.g.icon {
+        p.g.rt.DrawBitmap(bitmap, Some(&rc((x, y, s, s))), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
     }
 }
 
@@ -631,8 +590,9 @@ unsafe fn draw(p: &mut Pen, page: u8, scroll: f32, style: u32, surfaces: u32, au
     // Page content: shifted up a little (the title sits near y 44) and by the scroll offset, clipped to the content area.
     let k = p.k;
     p.dy = -12.0 - scroll;
-    gp::GdipSetClipRect(p.g, (NAV_W + 1.0) * k, 0.0, (W - NAV_W) * k, H * k, 0);
-    gp::GdipTranslateWorldTransform(p.g, 0.0, p.dy * k, 0);
+    let base = Matrix3x2 { M11: k, M12: 0.0, M21: 0.0, M22: k, M31: 0.0, M32: 0.0 };
+    p.g.rt.PushAxisAlignedClip(&rc((NAV_W + 1.0, 0.0, W - NAV_W, H)), D2D1_ANTIALIAS_MODE_ALIASED);
+    p.g.rt.SetTransform(&Matrix3x2 { M32: p.dy * k, ..base });
     let (title, hint) = match page {
         0 => (p.t("Tổng quan", "Overview"), p.t("Tình trạng hiện tại của PuwBar. Bấm một thẻ để chỉnh phần đó.", "How PuwBar is set up now. Click a card to change that part.")),
         1 => (p.t("Giao diện", "Look"), p.t("Chọn kiểu taskbar. Áp dụng ngay, không cần khởi động lại.", "Pick the taskbar style. It applies at once, no restart.")),
@@ -640,10 +600,7 @@ unsafe fn draw(p: &mut Pen, page: u8, scroll: f32, style: u32, surfaces: u32, au
         3 => (p.t("Hệ thống", "System"), p.t("Cách PuwBar chạy trên máy này.", "How PuwBar runs on this PC.")),
         _ => (p.t("Giới thiệu", "About"), ""),
     };
-    let body_fam = p.fam;
-    p.fam = p.dfam;
-    p.text((CX, 58.0, CW, 32.0), title, 24.0, true, TEXT, 0);
-    p.fam = body_fam;
+    p.title((CX, 58.0, CW, 32.0), title);
     p.text((CX, 90.0, CW, 22.0), hint, 12.0, false, MUTED, 0);
     match page {
         0 => page_overview(p, style, surfaces, autostart),
@@ -652,8 +609,8 @@ unsafe fn draw(p: &mut Pen, page: u8, scroll: f32, style: u32, surfaces: u32, au
         3 => page_system(p, autostart),
         _ => page_about(p),
     }
-    gp::GdipResetWorldTransform(p.g);
-    gp::GdipResetClip(p.g);
+    p.g.rt.SetTransform(&base);
+    p.g.rt.PopAxisAlignedClip();
     p.dy = 0.0;
 
     let max = if page == 1 { LOOK_SCROLL } else { 0.0 };
