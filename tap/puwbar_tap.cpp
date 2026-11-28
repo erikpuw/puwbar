@@ -2072,7 +2072,7 @@ private:
     }
 
     // Writes the taskbar's XAML tree to %TEMP%\puwbar_diag_tap.txt for puwbar.exe to fold into its report.
-    void DumpTreeOnUiThread() {
+    void DumpTreeOnUiThread(std::wstring const& fileName) {
         // Every tracked element that is still alive, grouped by the root of its visual tree: after a taskbar position
         // change Windows replaces the frame, and this shows which tree PuwBar still holds and which one it never saw.
         struct Alive {
@@ -2126,7 +2126,7 @@ private:
         wchar_t tmp[MAX_PATH]{};
         DWORD len = GetTempPathW(MAX_PATH, tmp);
         if (len == 0 || len >= MAX_PATH) return;
-        std::wstring path = std::wstring(tmp, len) + L"puwbar_diag_tap.txt";
+        std::wstring path = std::wstring(tmp, len) + fileName;
         HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h == INVALID_HANDLE_VALUE) return;
         DWORD written = 0;
@@ -2134,7 +2134,18 @@ private:
         CloseHandle(h);
     }
 
-    void DispatchDiag() {
+    // Two seconds after a taskbar position change, so the replaced frame has settled, writes a snapshot of the trees
+    // PuwBar tracks to %TEMP%\puwbar_diag_move.txt (overwritten each time).
+    void DispatchDelayedDiag() {
+        AddRef();
+        std::thread([this]() {
+            Sleep(2000);
+            DispatchDiag(L"puwbar_diag_move.txt");
+            Release();
+        }).detach();
+    }
+
+    void DispatchDiag(std::wstring fileName = L"puwbar_diag_tap.txt") {
         winrt::Windows::UI::Core::CoreDispatcher dispatcher{nullptr};
         {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -2145,8 +2156,8 @@ private:
                 AddRef();
                 dispatcher.RunAsync(
                     winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
-                    [this]() {
-                        DumpTreeOnUiThread();
+                    [this, fileName]() {
+                        DumpTreeOnUiThread(fileName);
                         Release();
                     });
             } catch (...) {
@@ -2246,6 +2257,7 @@ private:
                         Sleep(120);
                         lastEdge = GetTaskbarEdge();
                         DispatchSyncAlignment();
+                        DispatchDelayedDiag();
                         if (stuckKey && posEv) {
                             RegNotifyChangeKeyValue(stuckKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, posEv, TRUE);
                         }
@@ -2255,6 +2267,7 @@ private:
                         if (cur != lastEdge) {
                             lastEdge = cur;
                             DispatchSyncAlignment();
+                            DispatchDelayedDiag();
                         }
                     }
                 }
