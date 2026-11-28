@@ -1,4 +1,4 @@
-//! Direct2D + DirectWrite drawing surface for the settings window, presented through DirectComposition.
+//! Direct2D + DirectWrite drawing surface for the settings window, presented through Windows.UI.Composition.
 //!
 //! The window has no GDI bitmap (`WS_EX_NOREDIRECTIONBITMAP`); a premultiplied-alpha flip swap chain is the only
 //! content, so a redraw swaps whole frames (no clear-then-paint flicker) and text goes through DirectWrite.
@@ -9,10 +9,11 @@ use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
+
+use crate::glass::Glass;
 
 const PIXELS: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED };
 
@@ -33,14 +34,13 @@ pub struct Gfx {
     // Kept alive for as long as the window shows the swap chain.
     _ctx: ID2D1DeviceContext,
     _d3d: ID3D11Device,
-    _dcomp: IDCompositionDevice,
-    _target: IDCompositionTarget,
-    _visual: IDCompositionVisual,
+    _glass: Glass,
 }
 
 impl Gfx {
     /// `icon` is premultiplied BGRA pixels (width, height) for the logo, if the exe has one.
-    pub unsafe fn new(hwnd: HWND, w: i32, h: i32, icon: Option<(Vec<u8>, u32, u32)>) -> Result<Gfx> {
+    /// `radius` is the window's corner radius in pixels.
+    pub unsafe fn new(hwnd: HWND, w: i32, h: i32, radius: f32, icon: Option<(Vec<u8>, u32, u32)>) -> Result<Gfx> {
         let make = |driver: D3D_DRIVER_TYPE| -> Result<ID3D11Device> {
             let mut dev = None;
             D3D11CreateDevice(None, driver, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None, D3D11_SDK_VERSION, Some(&mut dev), None, None)?;
@@ -102,12 +102,7 @@ impl Gfx {
             rt.CreateBitmap(D2D_SIZE_U { width: iw, height: ih }, Some(px.as_ptr().cast()), iw * 4, &bp).ok()
         });
 
-        let dcomp: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
-        let target = dcomp.CreateTargetForHwnd(hwnd, true)?;
-        let visual = dcomp.CreateVisual()?;
-        visual.SetContent(&swap)?;
-        target.SetRoot(&visual)?;
-        dcomp.Commit()?;
+        let glass = Glass::new(hwnd, &swap, w, h, radius)?;
 
         Ok(Gfx {
             rt,
@@ -119,9 +114,7 @@ impl Gfx {
             swap,
             _ctx: ctx,
             _d3d: d3d,
-            _dcomp: dcomp,
-            _target: target,
-            _visual: visual,
+            _glass: glass,
         })
     }
 

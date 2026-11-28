@@ -58,6 +58,8 @@ name = "puwbar"
 version = "1.0.9"
 dependencies = [
  "windows",
+ "windows-collections",
+ "windows-core",
  "windows-numerics",
  "windows-sys",
 ]

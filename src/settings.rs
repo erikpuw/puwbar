@@ -18,10 +18,10 @@ use windows_numerics::{Matrix3x2, Vector2};
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::{
-        Dwm::{DwmEnableBlurBehindWindow, DwmSetWindowAttribute, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND},
+        Dwm::DwmSetWindowAttribute,
         Gdi::{
-            CreateCompatibleDC, CreateRoundRectRgn, DeleteDC, DeleteObject, GetDIBits, GetMonitorInfoW, InvalidateRect,
-            MonitorFromPoint, ScreenToClient, SetWindowRgn, ValidateRect, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+            CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetMonitorInfoW, InvalidateRect,
+            MonitorFromPoint, ScreenToClient, ValidateRect, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
             MONITORINFO, MONITOR_DEFAULTTONEAREST,
         },
     },
@@ -157,14 +157,7 @@ pub fn open(owner: HWND) {
         // Dark frame (DWMWA_USE_IMMERSIVE_DARK_MODE = 20) on a transient acrylic backdrop (DWMWA_SYSTEMBACKDROP_TYPE = 38, 3).
         let on: i32 = 1;
         DwmSetWindowAttribute(hwnd, 20, (&on as *const i32).cast(), 4);
-        let corner = (RADIUS * 2.0 * k) as i32;
-        SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, corner, corner), 1);
-        // Blur of the desktop behind, limited to the same rounded shape (the accent-policy blur ignores the region).
-        let blur_rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, corner, corner);
-        let blur = DWM_BLURBEHIND { dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION, fEnable: 1, hRgnBlur: blur_rgn, fTransitionOnMaximized: 0 };
-        DwmEnableBlurBehindWindow(hwnd, &blur);
-        DeleteObject(blur_rgn);
-        let gfx = match Gfx::new(windows::Win32::Foundation::HWND(hwnd as _), w, h, icon_pixels()) {
+        let gfx = match Gfx::new(windows::Win32::Foundation::HWND(hwnd as _), w, h, RADIUS * k, icon_pixels()) {
             Ok(g) => g,
             Err(_) => {
                 DestroyWindow(hwnd);

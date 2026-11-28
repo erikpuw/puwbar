@@ -2,6 +2,7 @@
 
 mod desktop;
 mod gfx;
+mod glass;
 mod settings;
 mod shell;
 mod tap;
