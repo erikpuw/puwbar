@@ -28,6 +28,8 @@ pub struct Gfx {
     pub dw: IDWriteFactory,
     pub brush: ID2D1SolidColorBrush,
     pub icon: Option<ID2D1Bitmap>,
+    /// Multiplies the alpha of everything drawn with `set_color` (page fade-in).
+    pub alpha: std::cell::Cell<f32>,
     pub title_family: PCWSTR,
     pub icon_family: Option<PCWSTR>,
     swap: IDXGISwapChain1,
@@ -109,6 +111,7 @@ impl Gfx {
             dw,
             brush,
             icon,
+            alpha: std::cell::Cell::new(1.0),
             title_family,
             icon_family,
             swap,
@@ -119,7 +122,9 @@ impl Gfx {
     }
 
     pub unsafe fn set_color(&self, c: u32) {
-        self.brush.SetColor(&color(c));
+        let mut c = color(c);
+        c.a *= self.alpha.get();
+        self.brush.SetColor(&c);
     }
 
     pub unsafe fn present(&self) -> Result<()> {
