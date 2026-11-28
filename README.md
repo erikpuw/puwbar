@@ -26,7 +26,8 @@
 | **Bọc kính đồng bộ** | Áp cùng lớp kính cho cụm System Tray, Start Menu, menu chuột phải ở tray, Jump List ứng dụng, tooltip, khung xem trước cửa sổ, Quick Settings, Thông báo, Lịch, popup overflow (`^`, `...`) và nút Widgets. |
 | **Trượt ngang mượt** | Nhịp trượt 300ms khớp với animation mở/đóng ứng dụng của Windows 11, khóa VSync theo tần số quét màn hình. |
 | **Nhẹ & gọn** | Chạy nền khoảng 1,2 MB RAM và 0% CPU. Cài đặt cố định và gỡ sạch qua Windows Installed apps, thoát ra là trả taskbar về nguyên bản. |
-| **Menu tray** | Khởi động cùng Windows, Kiểu giao diện (Kính mờ / Kính trong suốt / Không viền phản chiếu icon / Kính mờ phẳng), Khu vực áp kính (bật/tắt riêng từng bảng về gốc Windows), Áp dụng lại giao diện, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát (`Ctrl+Alt+F12`). |
+| **Bảng cài đặt** | Bấm chuột trái vào icon PuwBar ở khay để mở. Đổi kiểu giao diện, bật tắt từng khu vực kính, khởi động cùng Windows và ngôn ngữ ngay trong một cửa sổ. |
+| **Menu tray** | Khởi động cùng Windows, Kiểu giao diện (Kính mờ / Kính trong suốt / Không viền phản chiếu icon / Kính mờ phẳng / Trong suốt hoàn toàn), Khu vực áp kính (bật/tắt riêng từng bảng về gốc Windows), Áp dụng lại giao diện, Ngôn ngữ (Tiếng Việt / English), Giới thiệu, Thoát (`Ctrl+Alt+F12`). |
 
 **Khởi động cùng Windows** hỏi quyền quản trị một lần khi bật để tạo tác vụ Task Scheduler chạy ngay lúc đăng nhập (không trễ, tự chờ Explorer XAML sẵn sàng trong 30 giây). Nếu từ chối UAC, chương trình tự chuyển sang khóa `HKCU\...\Run`. Bỏ tick thì tắt.
 
@@ -41,7 +42,7 @@
 
 ### Kiểu taskbar
 
-Chọn trong menu tray, mục **Kiểu giao diện**.
+Chọn trong bảng cài đặt (bấm chuột trái vào icon ở khay) hoặc trong menu tray, mục **Kiểu giao diện**.
 
 **Kính mờ** (mặc định): nền nhòe nhẹ, vẫn thấy hình khối phía sau, mặt kính có ánh bóng.
 
@@ -58,6 +59,8 @@ Chọn trong menu tray, mục **Kiểu giao diện**.
 **Kính mờ phẳng**: giao diện của v1.0.7, viền mảnh, không bóng đổ.
 
 ![Kiểu Kính mờ phẳng](assets/screenshots/style-flat-frosted.png)
+
+**Trong suốt hoàn toàn**: không nền, không viền, không mờ, không bóng. Chỉ còn icon nổi trên hình nền.
 
 ## Cài đặt và dùng
 

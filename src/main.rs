@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod desktop;
+mod settings;
 mod shell;
 mod tap;
 mod tray;

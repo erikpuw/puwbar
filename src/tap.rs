@@ -49,6 +49,8 @@ const CMD_STYLE_FROSTED: u32 = 1020;
 const CMD_STYLE_CRYSTAL_CLEAR: u32 = 1021;
 const CMD_STYLE_ICON_REFLECT: u32 = 1022;
 const CMD_STYLE_FLAT_FROSTED: u32 = 1023;
+const CMD_STYLE_CLEAR: u32 = 1024;
+const CMD_SETTINGS: u32 = 1007;
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_VALUE: &str = "PuwBar";
 const APP_KEY: &str = "Software\\PuwBar";
@@ -139,6 +141,7 @@ enum TaskbarStyle {
     CrystalClear = 1,
     IconReflect = 2,
     FlatFrosted = 3,
+    Clear = 4,
 }
 
 impl TaskbarStyle {
@@ -147,6 +150,7 @@ impl TaskbarStyle {
             1 => Self::CrystalClear,
             2 => Self::IconReflect,
             3 => Self::FlatFrosted,
+            4 => Self::Clear,
             _ => Self::FrostedGlass,
         }
     }
@@ -222,6 +226,79 @@ unsafe fn save_surfaces_mask(mask: u32) {
 unsafe fn save_taskbar_style(style: TaskbarStyle) {
     save_reg_dword(STYLE_VALUE, style as u32);
     sync_glass_cfg_file(read_surfaces_mask(), style);
+}
+
+/// Snapshot of every user preference the settings window shows.
+pub(crate) struct Prefs {
+    pub style: u32,
+    pub surfaces: u32,
+    pub autostart: bool,
+    pub english: bool,
+}
+
+pub(crate) const SURFACE_BITS: [u32; 7] = [
+    SURF_START_MENU,
+    SURF_CONTROL_CENTER,
+    SURF_NOTIFICATIONS,
+    SURF_CALENDAR,
+    SURF_JUMP_LIST,
+    SURF_TOOLTIP,
+    SURF_THUMBNAIL,
+];
+
+pub(crate) fn prefs() -> Prefs {
+    unsafe {
+        Prefs {
+            style: read_taskbar_style() as u32,
+            surfaces: read_surfaces_mask(),
+            autostart: is_autostart_enabled(),
+            english: read_lang() == Lang::En,
+        }
+    }
+}
+
+unsafe fn signal_reload() {
+    let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
+    if !reload.is_null() {
+        SetEvent(reload);
+    }
+}
+
+pub(crate) fn apply_style(style: u32) {
+    unsafe {
+        save_taskbar_style(TaskbarStyle::from_u32(style));
+        signal_reload();
+    }
+}
+
+pub(crate) fn toggle_surface(bit: u32) {
+    unsafe {
+        save_surfaces_mask(read_surfaces_mask() ^ bit);
+        signal_reload();
+    }
+}
+
+pub(crate) fn apply_autostart(enable: bool) {
+    unsafe { set_autostart(enable) }
+}
+
+pub(crate) fn apply_language(hwnd: HWND, english: bool) {
+    unsafe {
+        let lang = if english { Lang::En } else { Lang::Vi };
+        save_lang(lang);
+        let icon = TRAY_ICON_HANDLE.with(|h| h.get()) as HICON;
+        if !icon.is_null() {
+            update_tray_icon(hwnd, icon, lang, NIM_MODIFY);
+        }
+    }
+}
+
+pub(crate) fn reapply() {
+    unsafe { signal_reload() }
+}
+
+pub(crate) fn quit() {
+    unsafe { PostQuitMessage(0) }
 }
 
 type InitXamlDiagExFn = unsafe extern "system" fn(
@@ -842,17 +919,33 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     };
     AppendMenuW(
         menu,
+        MF_STRING,
+        CMD_SETTINGS as usize,
+        wide(match lang {
+            Lang::Vi => "Cài đặt PuwBar...",
+            Lang::En => "PuwBar settings...",
+        })
+        .as_ptr(),
+    );
+    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    AppendMenuW(
+        menu,
         MF_STRING | if autostart { MF_CHECKED } else { MF_UNCHECKED },
         CMD_AUTOSTART as usize,
         wide(lbl_auto).as_ptr(),
     );
     let style_menu = CreatePopupMenu();
     if !style_menu.is_null() {
+        let lbl_style_none = match lang {
+            Lang::Vi => "Trong suốt hoàn toàn",
+            Lang::En => "Fully transparent",
+        };
         for (st, cmd, label) in [
             (TaskbarStyle::FrostedGlass, CMD_STYLE_FROSTED, lbl_style_frosted),
             (TaskbarStyle::CrystalClear, CMD_STYLE_CRYSTAL_CLEAR, lbl_style_clear),
             (TaskbarStyle::IconReflect, CMD_STYLE_ICON_REFLECT, lbl_style_reflect),
             (TaskbarStyle::FlatFrosted, CMD_STYLE_FLAT_FROSTED, lbl_style_flat),
+            (TaskbarStyle::Clear, CMD_STYLE_CLEAR, lbl_style_none),
         ] {
             AppendMenuW(
                 style_menu,
@@ -940,48 +1033,13 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     DestroyMenu(menu);
 
     match choice {
+        CMD_SETTINGS => crate::settings::open(hwnd),
         CMD_AUTOSTART => set_autostart(!autostart),
-        CMD_STYLE_FROSTED | CMD_STYLE_CRYSTAL_CLEAR | CMD_STYLE_ICON_REFLECT | CMD_STYLE_FLAT_FROSTED => {
-            let next = match choice {
-                CMD_STYLE_CRYSTAL_CLEAR => TaskbarStyle::CrystalClear,
-                CMD_STYLE_ICON_REFLECT => TaskbarStyle::IconReflect,
-                CMD_STYLE_FLAT_FROSTED => TaskbarStyle::FlatFrosted,
-                _ => TaskbarStyle::FrostedGlass,
-            };
-            save_taskbar_style(next);
-            let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
-            if !reload.is_null() {
-                SetEvent(reload);
-            }
-        }
-        CMD_SURF_START_MENU..=CMD_SURF_THUMBNAIL => {
-            let bit = 1u32 << (choice - CMD_SURF_START_MENU);
-            save_surfaces_mask(surfaces ^ bit);
-            let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
-            if !reload.is_null() {
-                SetEvent(reload);
-            }
-        }
-        CMD_REAPPLY => {
-            let reload = RELOAD_HANDLE.with(|r| r.get()) as HANDLE;
-            if !reload.is_null() {
-                SetEvent(reload);
-            }
-        }
-        CMD_LANG_VI => {
-            save_lang(Lang::Vi);
-            let icon = TRAY_ICON_HANDLE.with(|h| h.get()) as HICON;
-            if !icon.is_null() {
-                update_tray_icon(hwnd, icon, Lang::Vi, NIM_MODIFY);
-            }
-        }
-        CMD_LANG_EN => {
-            save_lang(Lang::En);
-            let icon = TRAY_ICON_HANDLE.with(|h| h.get()) as HICON;
-            if !icon.is_null() {
-                update_tray_icon(hwnd, icon, Lang::En, NIM_MODIFY);
-            }
-        }
+        CMD_STYLE_FROSTED..=CMD_STYLE_CLEAR => apply_style(choice - CMD_STYLE_FROSTED),
+        CMD_SURF_START_MENU..=CMD_SURF_THUMBNAIL => toggle_surface(1u32 << (choice - CMD_SURF_START_MENU)),
+        CMD_REAPPLY => reapply(),
+        CMD_LANG_VI => apply_language(hwnd, false),
+        CMD_LANG_EN => apply_language(hwnd, true),
         CMD_ABOUT => show_about_dialog(hwnd, lang),
         CMD_EXIT => PostQuitMessage(0),
         _ => {}
@@ -1000,7 +1058,9 @@ unsafe extern "system" fn host_wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
     match msg {
         TRAY_CALLBACK => {
             let ev = (l as u32) & 0xffff;
-            if ev == WM_RBUTTONUP || ev == WM_LBUTTONUP || ev == WM_CONTEXTMENU {
+            if ev == WM_LBUTTONUP {
+                crate::settings::open(hwnd);
+            } else if ev == WM_RBUTTONUP || ev == WM_CONTEXTMENU {
                 show_tray_menu(hwnd);
             }
             return 0;
@@ -1191,6 +1251,7 @@ mod tests {
         assert_eq!(TaskbarStyle::from_u32(1), TaskbarStyle::CrystalClear);
         assert_eq!(TaskbarStyle::from_u32(2), TaskbarStyle::IconReflect);
         assert_eq!(TaskbarStyle::from_u32(3), TaskbarStyle::FlatFrosted);
+        assert_eq!(TaskbarStyle::from_u32(4), TaskbarStyle::Clear);
         assert_eq!(TaskbarStyle::from_u32(99), TaskbarStyle::FrostedGlass);
         assert_eq!(format_glass_cfg(SURF_ALL, TaskbarStyle::FrostedGlass), "7f:0");
         assert_eq!(
@@ -1199,5 +1260,6 @@ mod tests {
         );
         assert_eq!(format_glass_cfg(0, TaskbarStyle::IconReflect), "00:2");
         assert_eq!(format_glass_cfg(SURF_ALL, TaskbarStyle::FlatFrosted), "7f:3");
+        assert_eq!(format_glass_cfg(SURF_ALL, TaskbarStyle::Clear), "7f:4");
     }
 }

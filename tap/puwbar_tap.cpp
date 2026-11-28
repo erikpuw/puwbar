@@ -63,6 +63,7 @@ static constexpr int STYLE_FROSTED_GLASS = 0; // Default frosted glass
 static constexpr int STYLE_CRYSTAL_CLEAR = 1; // Transparent glass with glossy reflection
 static constexpr int STYLE_ICON_REFLECT  = 2; // Completely borderless/transparent + real icon reflection
 static constexpr int STYLE_FLAT_FROSTED  = 3; // v1.0.7 look: popup glass, 0.65px catch-light rim, no shadow
+static constexpr int STYLE_CLEAR         = 4; // Fully transparent pills: no fill, no blur, no rim, no shadow, no reflection
 
 struct GlassConfig {
     uint32_t surfaces = SURF_ALL;
@@ -103,7 +104,7 @@ static GlassConfig ReadGlassConfig() {
     if (*endPtr == ':' && endPtr[1] != '\0') {
         int parsedStyle = static_cast<int>(strtol(endPtr + 1, nullptr, 10));
         if (parsedStyle == STYLE_CRYSTAL_CLEAR || parsedStyle == STYLE_ICON_REFLECT
-            || parsedStyle == STYLE_FLAT_FROSTED) {
+            || parsedStyle == STYLE_FLAT_FROSTED || parsedStyle == STYLE_CLEAR) {
             cfg.style = parsedStyle;
         } else {
             cfg.style = STYLE_FROSTED_GLASS;
@@ -588,7 +589,7 @@ static media::LinearGradientBrush MakeCrystalClearBackground() {
 }
 
 static media::Brush MakeTaskbarPillBackground(xaml::DependencyObject const& obj, int style) {
-    if (style == STYLE_ICON_REFLECT) {
+    if (style == STYLE_ICON_REFLECT || style == STYLE_CLEAR) {
         return media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
     }
     if (style == STYLE_CRYSTAL_CLEAR) {
@@ -623,7 +624,7 @@ static media::LinearGradientBrush MakeHairlineCatchRim() {
 }
 
 static media::Brush MakeTaskbarPillBorder(int style) {
-    if (style == STYLE_ICON_REFLECT) {
+    if (style == STYLE_ICON_REFLECT || style == STYLE_CLEAR) {
         return media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
     }
     if (style == STYLE_FLAT_FROSTED) {
@@ -633,7 +634,7 @@ static media::Brush MakeTaskbarPillBorder(int style) {
 }
 
 static xaml::Thickness TaskbarPillBorderThickness(int style) {
-    if (style == STYLE_ICON_REFLECT) {
+    if (style == STYLE_ICON_REFLECT || style == STYLE_CLEAR) {
         return xaml::Thickness{0.0, 0.0, 0.0, 0.0};
     }
     double t = (style == STYLE_FLAT_FROSTED) ? 0.65 : 1.0;
@@ -643,7 +644,7 @@ static xaml::Thickness TaskbarPillBorderThickness(int style) {
 static float TaskbarPillShadowZ(int style) {
     // Keep elevation low: ThemeShadow blur scales with Z and gets clipped by the taskbar
     // XAML island bounds, leaving a hard horizontal cut line at the taskbar edge.
-    if (style == STYLE_ICON_REFLECT || style == STYLE_FLAT_FROSTED) return 0.0f;
+    if (style == STYLE_ICON_REFLECT || style == STYLE_FLAT_FROSTED || style == STYLE_CLEAR) return 0.0f;
     return (style == STYLE_CRYSTAL_CLEAR) ? 4.0f : 3.0f;
 }
 
@@ -685,6 +686,18 @@ static TaskbarEdge GetTaskbarEdge() {
         return ((rc.top + rc.bottom) / 2 < midY) ? TaskbarEdge::Top : TaskbarEdge::Bottom;
     }
     return (h > w) ? TaskbarEdge::Left : TaskbarEdge::Bottom;
+}
+
+// Windows makes the Start button (LaunchListButton) ~5px larger along the taskbar when the taskbar is
+// start-aligned. Horizontal: trim the left overhang so both pill ends match. Vertical: trim half of the
+// extra height above and below, otherwise the first app icon sits a visible gap away from Start.
+static xaml::Thickness LaunchButtonMargin() {
+    TaskbarEdge edge = GetTaskbarEdge();
+    bool startAligned = IsTaskbarAlignedStart();
+    if (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right) {
+        return startAligned ? xaml::Thickness{0.0, -2.5, 0.0, -2.5} : xaml::Thickness{0.0, 0.0, 0.0, 0.0};
+    }
+    return xaml::Thickness{startAligned ? -7.0 : 0.0, 0.0, 0.0, 0.0};
 }
 
 // Smooth GPU implicit animation for horizontal position (Offset only — no Size lag so no empty ghost slot appears).
@@ -1065,13 +1078,7 @@ private:
         }
 
         if (type == L"Taskbar.ExperienceToggleButton" && name == L"LaunchListButton") {
-            if (!vertical) {
-                setProp(
-                    xaml::FrameworkElement::MarginProperty(),
-                    winrt::box_value(startAligned ? xaml::Thickness{-7.0, 0.0, 0.0, 0.0} : xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
-            } else {
-                setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{0.0, 0.0, 0.0, 0.0}));
-            }
+            setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(LaunchButtonMargin()));
             return;
         }
 
@@ -1499,14 +1506,11 @@ private:
                     xaml::FrameworkElement::MarginProperty(),
                     [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
                         try {
-                            TaskbarEdge edge = GetTaskbarEdge();
-                            if (edge == TaskbarEdge::Bottom || edge == TaskbarEdge::Top) {
-                                double wantLeft = IsTaskbarAlignedStart() ? -7.0 : 0.0;
-                                auto cur = winrt::unbox_value_or<xaml::Thickness>(
-                                    sender.GetValue(dp), xaml::Thickness{wantLeft, 0.0, 0.0, 0.0});
-                                if (cur.Left != wantLeft) {
-                                    sender.SetValue(dp, winrt::box_value(xaml::Thickness{wantLeft, cur.Top, cur.Right, cur.Bottom}));
-                                }
+                            xaml::Thickness want = LaunchButtonMargin();
+                            auto cur = winrt::unbox_value_or<xaml::Thickness>(sender.GetValue(dp), want);
+                            if (cur.Left != want.Left || cur.Top != want.Top || cur.Right != want.Right
+                                || cur.Bottom != want.Bottom) {
+                                sender.SetValue(dp, winrt::box_value(want));
                             }
                         } catch (...) {
                         }
