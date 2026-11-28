@@ -1164,31 +1164,26 @@ private:
         }
 
         if (name == L"IconPanel") {
-            // On a vertical taskbar the stock icon panel is 48px wide (MinWidth=48) inside a 42px button (and sits
-            // 3-4px off inside the 48px buttons of the overflow flyout), so the icons are pushed right of Start.
-            // Override MinWidth/MaxWidth alongside Width so XAML's clamp(Width, MinWidth, MaxWidth) yields 40px.
-            setProp(
-                xaml::FrameworkElement::HorizontalAlignmentProperty(),
-                winrt::box_value(vertical ? xaml::HorizontalAlignment::Center : xaml::HorizontalAlignment::Stretch));
-            setProp(
-                xaml::FrameworkElement::MinWidthProperty(),
-                winrt::box_value(0.0));
-            setProp(
-                xaml::FrameworkElement::MaxWidthProperty(),
-                winrt::box_value(vertical ? 40.0 : std::numeric_limits<double>::infinity()));
-            setProp(
-                xaml::FrameworkElement::WidthProperty(),
-                winrt::box_value(vertical ? 40.0 : std::numeric_limits<double>::quiet_NaN()));
+            // Taskbar.TaskListButton's custom ArrangeOverride always arranges IconPanel at 48px inside a 42px
+            // vertical button (ignoring Width/MinWidth/MaxWidth), placing BackgroundElement at x=7..47 and Icon
+            // at x=15 (+3px right of Start at x=12). Shift it -3px in render space so icons align to x=12.0.
+            media::TranslateTransform shift;
+            shift.X(vertical ? -3.0 : 0.0);
+            setProp(xaml::UIElement::RenderTransformProperty(), shift);
             return;
         }
 
         if (name == L"RunningIndicator") {
             if (edge == TaskbarEdge::Right) {
                 setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Right));
+                setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             } else if (edge == TaskbarEdge::Left) {
                 setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Left));
+                // Compensate for IconPanel's -3px render shift so the left indicator stays inside RootGrid.
+                setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{4.0, 1.0, 1.0, 1.0}));
             } else {
                 setProp(xaml::FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(xaml::HorizontalAlignment::Center));
+                setProp(xaml::FrameworkElement::MarginProperty(), winrt::box_value(xaml::Thickness{1.0, 1.0, 1.0, 1.0}));
             }
             return;
         }
@@ -1795,50 +1790,6 @@ private:
 
         if (name == L"IconPanel") {
             ApplyLayoutProps(obj, type, name, parentType, true);
-            // Explorer resets IconPanel back to MinWidth=48 / Width=48 / Stretch when switching VisualStates on
-            // vertical taskbars, pushing idle app icons 3-4px right of Start. Lock all four properties while vertical.
-            try {
-                auto lockDouble = [&](xaml::DependencyProperty const& prop, double want) {
-                    auto tok = obj.RegisterPropertyChangedCallback(
-                        prop,
-                        [want](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
-                            try {
-                                TaskbarEdge edge = GetTaskbarEdge();
-                                if (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right) {
-                                    double cur = winrt::unbox_value_or<double>(
-                                        sender.GetValue(dp), std::numeric_limits<double>::quiet_NaN());
-                                    if (!(cur == want)) {
-                                        sender.SetValue(dp, winrt::box_value(want));
-                                    }
-                                }
-                            } catch (...) {
-                            }
-                        });
-                    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                    m_propCallbacks.push_back({winrt::make_weak(obj), prop, tok});
-                };
-                lockDouble(xaml::FrameworkElement::MinWidthProperty(), 0.0);
-                lockDouble(xaml::FrameworkElement::MaxWidthProperty(), 40.0);
-                lockDouble(xaml::FrameworkElement::WidthProperty(), 40.0);
-                auto alignToken = obj.RegisterPropertyChangedCallback(
-                    xaml::FrameworkElement::HorizontalAlignmentProperty(),
-                    [](xaml::DependencyObject const& sender, xaml::DependencyProperty const& dp) {
-                        try {
-                            TaskbarEdge edge = GetTaskbarEdge();
-                            if (edge == TaskbarEdge::Left || edge == TaskbarEdge::Right) {
-                                auto cur = winrt::unbox_value_or<xaml::HorizontalAlignment>(
-                                    sender.GetValue(dp), xaml::HorizontalAlignment::Stretch);
-                                if (cur != xaml::HorizontalAlignment::Center) {
-                                    sender.SetValue(dp, winrt::box_value(xaml::HorizontalAlignment::Center));
-                                }
-                            }
-                        } catch (...) {
-                        }
-                    });
-                std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                m_propCallbacks.push_back({winrt::make_weak(obj), xaml::FrameworkElement::HorizontalAlignmentProperty(), alignToken});
-            } catch (...) {
-            }
             return;
         }
 
