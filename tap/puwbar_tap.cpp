@@ -953,7 +953,7 @@ private:
             || name == L"JumpListAcrylic"
             || name == L"AcrylicBorder"
             || name == L"RunningIndicator"
-            || (name == L"IconPanel" && parentType == L"Taskbar.TaskListButton")
+            || name == L"IconPanel"
             || (name == L"ExperienceToggleButtonRootPanel"
                 && parentType == L"Taskbar.AugmentedEntryPointButton");
     }
@@ -1112,12 +1112,16 @@ private:
             return;
         }
 
-        if (name == L"IconPanel" && parentType == L"Taskbar.TaskListButton") {
-            // A vertical taskbar's button slot is 42px but the stock icon panel is 48px wide, so the icons spill
-            // 6px to one side and sit off-centre next to the Start button. Cap the panel at the slot width.
+        if (name == L"IconPanel") {
+            // On a vertical taskbar the stock icon panel is 48px wide inside a 42px button (and sits 3px off inside the
+            // 48px buttons of the overflow flyout), so the icons are off-centre. Make the panel exactly as wide as the
+            // 40px icon background and centre it in whatever slot it gets.
             setProp(
-                xaml::FrameworkElement::MaxWidthProperty(),
-                winrt::box_value(vertical ? 42.0 : std::numeric_limits<double>::infinity()));
+                xaml::FrameworkElement::HorizontalAlignmentProperty(),
+                winrt::box_value(vertical ? xaml::HorizontalAlignment::Center : xaml::HorizontalAlignment::Stretch));
+            setProp(
+                xaml::FrameworkElement::WidthProperty(),
+                winrt::box_value(vertical ? 40.0 : std::numeric_limits<double>::quiet_NaN()));
             return;
         }
 
@@ -1709,7 +1713,7 @@ private:
             return;
         }
 
-        if (name == L"IconPanel" && parentType == L"Taskbar.TaskListButton") {
+        if (name == L"IconPanel") {
             ApplyLayoutProps(obj, type, name, parentType, true);
             return;
         }
@@ -2017,7 +2021,7 @@ private:
                     || (t.type == L"Taskbar.ExperienceToggleButton" && t.name == L"LaunchListButton")
                     || t.name == L"SystemTrayFrameGrid"
                     || t.name == L"RunningIndicator"
-                    || (t.name == L"IconPanel" && t.parentType == L"Taskbar.TaskListButton")
+                    || t.name == L"IconPanel"
                     || (t.name == L"ExperienceToggleButtonRootPanel"
                         && t.parentType == L"Taskbar.AugmentedEntryPointButton")) {
                     targets.push_back(t);
